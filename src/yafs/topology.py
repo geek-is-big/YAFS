@@ -120,6 +120,23 @@ class Topology:
         for edge in data["link"]:
             self.G.add_edge(edge["s"], edge["d"], BW=edge[self.LINK_BW],PR=edge[self.LINK_PR])
 
+        # Adding custom WATT LINK attributes if exist
+        valuesWTrans = {}
+        for edge in data["link"]:
+            try:
+                valuesWTrans[(edge["s"],edge["d"])] = edge["WATT_TRANS"]
+            except KeyError:
+                valuesWTrans[(edge["s"],edge["d"])] = 0.0
+        nx.set_edge_attributes(self.G, values=valuesWTrans, name="WATT_TRANS")
+
+        valuesWRecv = {}
+        for edge in data["link"]:
+            try:
+                valuesWRecv[(edge["s"],edge["d"])] = edge["WATT_RECV"]
+            except KeyError:
+                valuesWRecv[(edge["s"],edge["d"])] = valuesWTrans[(edge["s"],edge["d"])]
+        nx.set_edge_attributes(self.G, values=valuesWRecv, name="WATT_RECV")
+
 
         #TODO This part can be removed in next versions
         for node in data["entity"]:
