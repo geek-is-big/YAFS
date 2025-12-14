@@ -73,13 +73,36 @@ class Stats:
             for id_node in nodes.index:
                 results[id_node] = {"model": nodeInfo[id_node]["model"], "type": nodeInfo[id_node]["type"],
                                  "watt": nodes.loc[id_node].time_service * nodeInfo[id_node]["WATT"]}
+        elif by == Metrics.WATT_LINK:
+            linkInfo = topology.get_edges()
+            df_link_grouped = self.df_link.groupby(["src","dst"]).agg({"latency":"sum"})
+            for link in df_link_grouped.index:
+                src = link[0]
+                dst = link[1]
+                time_link = df_link_grouped.loc[link].latency
+                watt_trans = linkInfo[(src,dst)]["WATT_TRANS"]
+                energy_trans = time_link * watt_trans
+                watt_recv = linkInfo[(src,dst)]["WATT_RECV"]
+                energy_recv = time_link * watt_recv
+                if src not in results:
+                    results[src] = {"model": nodeInfo[src]["model"], "type": nodeInfo[src]["type"],
+                                    "watt_trans":0.0, "watt_recv":0.0}
+                if dst not in results:
+                    results[dst] = {"model": nodeInfo[dst]["model"], "type": nodeInfo[dst]["type"],
+                                    "watt_trans":0.0, "watt_recv":0.0}
+                results[src]["watt_trans"] += energy_trans
+                results[dst]["watt_recv"] += energy_recv
         else:
             for node_key in nodeInfo:
                 if not nodeInfo[node_key]["uptime"][1]:
                     end = totaltime
                 start = nodeInfo[node_key]["uptime"][0]
                 uptime = end-start
-                results[node_key] = {"model":nodeInfo[node_key]["model"],"type":nodeInfo[node_key]["type"],"watt":uptime*nodeInfo[node_key]["WATT"],"uptime":uptime}
+                results[node_key] = {"model":nodeInfo[node_key]["model"],
+                                     "type":nodeInfo[node_key]["type"],
+                                     "watt":uptime*nodeInfo[node_key]["WATT"],
+                                     "uptime":uptime
+                                     }
 
         return results
 
@@ -108,32 +131,44 @@ class Stats:
 
 
 
+    # multiplier - good for periodic processes to scale results for a longer run
+    def showResults(self, total_time, topology, time_loops=None, multiplier=1):
+        if multiplier <= 0:
+            multiplier = 1
+        elif multiplier > 1:
+            print ("\tNote: Results are multiplied by %f" % multiplier)
 
-    def showResults(self, total_time, topology, time_loops=None):
-        print ("\tSimulation Time: %0.2f" % total_time)
+        print ("\tSimulation Time: %0.2f" % (total_time * multiplier))
 
         if time_loops is not None:
             print ("\tApplication loops delays:")
             results = self.average_loop_response(time_loops)
             for i, loop in enumerate(time_loops):
-                print ("\t\t%i - %s :\t %f" % (i, str(loop), results[i]))
+                print ("\t\t%i - %s :\t %f" % (i, str(loop), results[i] * multiplier))
 
         print ("\tEnergy Consumed (WATTS by UpTime):")
         values = self.get_watt(total_time, topology, Metrics.WATT_UPTIME)
         for node in values:
-            print ("\t\t%i - %s :\t %.2f" % (node, values[node]["model"], values[node]["watt"]))
+            print ("\t\t%i - %s :\t %.2f" % (node, values[node]["model"], values[node]["watt"] * multiplier))
 
         print ("\tEnergy Consumed by Service (WATTS by Service Time):")
         values = self.get_watt(total_time, topology, Metrics.WATT_SERVICE)
         for node in values:
-            print ("\t\t%i - %s :\t %.2f" % (node, values[node]["model"], values[node]["watt"]))
+            print ("\t\t%i - %s :\t %.2f" % (node, values[node]["model"], values[node]["watt"] * multiplier))
 
-        print ("\tCost of execution in cloud:")
-        total, values = self.get_cost_cloud(topology)
-        print ("\t\t%.8f" % total)
+        print ("\tEnergy Consumed by Transmission Link (WATTS by Link Time):")
+        values = self.get_watt(total_time, topology, Metrics.WATT_LINK)
+        for node in values:
+            print ("\t\t%i - %s :\t Transmit: %.2f  Recv: %.2f" % (node, values[node]["model"],
+                                                        values[node]["watt_trans"] * multiplier,
+                                                        values[node]["watt_recv"] * multiplier))
+
+        # print ("\tCost of execution in cloud:")
+        # total, values = self.get_cost_cloud(topology)
+        # print ("\t\t%.8f" % total)
 
         print ("\tNetwork bytes transmitted:")
-        print ("\t\t%.1f" % self.bytes_transmitted())
+        print ("\t\t%.1f" % (self.bytes_transmitted() * multiplier))
 
 
     def showResults2(self, total_time, time_loops=None):

@@ -10,6 +10,7 @@ class Metrics:
 
     WATT_SERVICE = "byService"
     WATT_UPTIME = "byUptime"
+    WATT_LINK = "byLink"
 
 
     def __init__(self, default_results_path=None):
