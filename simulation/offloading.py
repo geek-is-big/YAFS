@@ -24,13 +24,15 @@ from yafs.selection import First_ShortestPath
 from yafs.distribution import deterministic_distribution
 from yafs.stats import Stats
 
-# from jsonPopulation import JSONPopulation
+# from jsonAllocation import JSONPopulation
 
 class TimeUnit(Enum):
     SECOND = 1
     MILLISECOND = 2
 
-APP_NAME = "OverMobileCase"
+# APP_NAME = "MobileScenario"
+# APP_NAME = "HybridScenario"
+APP_NAME = "FogScenario"
 TIME_UNIT = TimeUnit.SECOND
 
 def watt_to_wpt(watt: float) -> float:
@@ -91,39 +93,42 @@ def create_topology() -> Topology:
     # - BLE (4.1) Link Power: Trans: 180.7mW / Recv: 174.9mW
     ##   Poster: Measuring and Optimizing Android Smartwatch Energy Consumption
     ##.  https://dl.acm.org/doi/10.1145/2973750.2985259
-    cloud_dev    = {"id": 0, "model": "cloud-device", "type": "CLOUD", "IPT": 5000 * 10 ** 6, "RAM": 40000, "WATT": 0.0}
+    cloud_dev    = {"id": 0, "model": "cloud-device", "type": "CLOUD", "IPT": 5000 * 10**6, "RAM": 40000, "WATT": 0.0}
     fog_dev = {"id": 1, "model": "fog-device", "type": "FOG",
-               "IPT": ips_to_ipt(500 * 10 ** 6),
+               "IPT": ips_to_ipt(500 * 10**6),
                "RAM": 256,
                "WATT": watt_to_wpt(0.9)}
     mobile_dev = {"id": 2, "model": "mobile-device", "type": "EDGE",
-                  "IPT": ips_to_ipt(1.9 * 10 ** 9),
+                  "IPT": ips_to_ipt(1.9 * 10**9),
                   "RAM": 2000,
                   "WATT": watt_to_wpt(1.3)}
     smartwatch_dev   = {"id": 3, "model": "smartwatch-device", "type": "IOT",
-                        "IPT": ips_to_ipt(768 * 10 ** 6),
+                        "IPT": ips_to_ipt(768 * 10**6),
                         "RAM": 256,
                         "WATT": watt_to_wpt(0.361)}
-
-    # BLE 4.0/4.1 Modulation Rate: 1 Mb/s, Max Throughput: 0.305 Mb/s
-    ##  Data Transmission Efficiency in Bluetooth Low Energy Versions
-    ## https://www.mdpi.com/1424-8220/19/17/3746
-    link1 = {"s": 3, "d": 2, "BW": 0.305, "PR": 0,
-             "WATT_TRANS": watt_to_wpt(0.181), "WATT_RECV":watt_to_wpt(0.174)}  # SW - Mobile
-
-    # 100 Mbit/s = 12,5 Mb/s
-    link2 = {"s": 2, "d": 1, "BW": 12.5, "PR": 0,
-             "WATT_TRANS": watt_to_wpt(0.654), "WATT_RECV": watt_to_wpt(3.7)} # Mobile - Fog
-    link3 = {"s": 1, "d": 0, "BW": 12.5, "PR": 0,
-             "WATT_TRANS": watt_to_wpt(4.9), "WATT_RECV": watt_to_wpt(5)} # Fog - Cloud
+    # Use the same characteristics as smartwatch for the ECG device
+    ecg_dev = {"id": 4, "model": "ecg-device", "type": "IOT",
+               "IPT": ips_to_ipt(768 * 10**6),
+               "RAM": 256,
+               "WATT": watt_to_wpt(0.361)}
 
     topology_json["entity"].append(cloud_dev)
     topology_json["entity"].append(smartwatch_dev)
     topology_json["entity"].append(mobile_dev)
     topology_json["entity"].append(fog_dev)
-    topology_json["link"].append(link1)
-    topology_json["link"].append(link2)
-    topology_json["link"].append(link3)
+    topology_json["entity"].append(ecg_dev)
+    
+    # BLE 4.0/4.1 Modulation Rate: 1 Mb/s, Max Throughput: 0.305 Mb/s
+    ##  Data Transmission Efficiency in Bluetooth Low Energy Versions
+    ## https://www.mdpi.com/1424-8220/19/17/3746
+
+    # 100 Mbit/s = 12,5 Mb/s
+    with open(f"{APP_NAME}/networkDefinition.json", "r") as f:
+        data = json.load(f)
+        for link in data['link']:
+            link['WATT_TRANS'] = watt_to_wpt(link['WATT_TRANS'])
+            link['WATT_RECV'] = watt_to_wpt(link['WATT_RECV'])
+            topology_json["link"].append(link)
 
     t = Topology()
     t.load(topology_json)
@@ -136,31 +141,45 @@ def create_application():
     a = Application(name=APP_NAME)
 
     # (SmartWatch) --> (Mobile) --> (Fog) --> (Cloud)
+    # (EcgSensor) -------^
     a.set_modules([{"Cloud": {"Type": Application.TYPE_SINK}},
                    {"Fog": {"RAM": 1024, "Type": Application.TYPE_MODULE}},
                    {"Mobile": {"RAM": 1024, "Type": Application.TYPE_MODULE}},
-                   {"SmartWatch":{"Type":Application.TYPE_SOURCE}}
+                   {"SmartWatch":{"Type":Application.TYPE_MODULE}},
+                   {"EcgSensor":{"Type":Application.TYPE_MODULE}},
+                   {"Virtual-SW-Gen":{"Type":Application.TYPE_SOURCE}},
+                   {"Virtual-ECG-Gen":{"Type":Application.TYPE_SOURCE}}
                    ])
+    
     """
     Messages among MODULES
     """
-    m_sensor_data = Message("M.SW-M", "SmartWatch", "Mobile", instructions=100 * 10 ** 6, bytes=100000)
-    m_state = Message("M.M-F", "Mobile", "Fog", instructions=0, bytes=20000)
-    m_state_to_cloud = Message("M.F-C", "Fog", "Cloud", instructions=0, bytes=20000)
+    with open(f"{APP_NAME}/appDefinition.json", "r") as f:
+        data = json.load(f)
 
-    """
-    Defining which messages will be dynamically generated # the generation is controlled by Population algorithm
-    """
-    # deterministic_distribution for add_service_source
-    a.add_source_messages(m_sensor_data)
+        ms = {}
+        for message in data["message"]:
+            #print(f"{APP_NAME} message name: %s" %message["name"])
+            ms[message["name"]] = Message(message["name"],message["s"],message["d"],instructions=message["instructions"],bytes=message["bytes"])
+            if message["s"] == "None":
+                """
+                Defining which messages will be dynamically generated # the generation is controlled by Population algorithm
+                """
+                a.add_source_messages(ms[message["name"]])
 
-    """
-    MODULES/SERVICES: Definition of Generators and Consumers (AppEdges and TupleMappings in iFogSim)
-    """
-    # MODULE SERVICES
-    a.add_service_module("Mobile", m_sensor_data, m_state, fractional_selectivity, threshold=1.0)
-    a.add_service_module("Fog", m_state, m_state_to_cloud, fractional_selectivity, threshold=1.0)
-
+        """
+        MODULES/SERVICES: Definition of Generators and Consumers (AppEdges and TupleMappings in iFogSim)
+        """
+        #print("Total messages %i" %len(ms.keys()))
+        for idx, message in enumerate(data["transmission"]):
+            if "message_out" in message.keys():
+                value_treshhold = 1.0
+                if "fractional" in message.keys():
+                    value_treshhold = message["fractional"]
+                a.add_service_module(message["module"], ms[message["message_in"]], ms[message["message_out"]], fractional_selectivity, threshold=value_treshhold)
+            else:
+                a.add_service_module(message["module"], ms[message["message_in"]])
+        
     return a
 
 
@@ -193,6 +212,8 @@ def main(stop_time, it,folder_results):
         "initialAllocation": [
             {"app": APP_NAME, "module_name": "Fog", "id_resource": 1},
             {"app": APP_NAME, "module_name": "Mobile", "id_resource": 2},
+            {"app": APP_NAME, "module_name": "SmartWatch", "id_resource": 3},
+            {"app": APP_NAME, "module_name": "EcgSensor", "id_resource": 4}
         ]
     }
     placement = JSONPlacement(name="Placement", json=placementJson)
@@ -211,8 +232,11 @@ def main(stop_time, it,folder_results):
     pop.set_sink_control({"model":"cloud-device", "number":1, "module":app.get_sink_modules()})
 
     #In addition, a source includes a distribution function:
-    dDistribution = deterministic_distribution(name="Deterministic", time=1)
-    pop.set_src_control({"model": "smartwatch-device", "number":1, "message": app.get_message("M.SW-M"), "distribution": dDistribution})
+    dDistribution1 = deterministic_distribution(name="Deterministic", time=1)
+    pop.set_src_control({"model": "smartwatch-device", "number":1, "message": app.get_message("M.SW-Generation"), "distribution": dDistribution1})
+
+    dDistribution2 = deterministic_distribution(name="Deterministic", time=2)
+    pop.set_src_control({"model": "ecg-device", "number":1, "message": app.get_message("M.ECG-Generation"), "distribution": dDistribution2})
 
     # populationJSON = {
     #     "sinks": [
@@ -252,7 +276,15 @@ def main(stop_time, it,folder_results):
     s.print_debug_assignaments()
 
     s1 = Stats(defaultPath=os.path.join(os.getcwd(), folder_results, "sim_trace"))
-    s1.showResults(total_time=stop_time, topology=t, multiplier=1440)
+
+    # Consumption and number of bytes report
+    s1.showResults(total_time=stop_time, topology=t, multiplier=1)
+
+    # Latency report
+    print("\nLatency Report (in time unit):")
+    latency = pd.concat([s1.times("time_latency"), s1.times("time_service"), s1.times("time_total_response")], axis=1)
+    latency.loc["Total"] = latency.sum()
+    print(latency)
 
 
 if __name__ == '__main__':
@@ -264,7 +296,7 @@ if __name__ == '__main__':
     folder_results = str(folder_results)+"/"
 
     nIterations = 1  # iteration for each experiment
-    simulationDuration = 60
+    simulationDuration = 3600
 
     # Iteration for each experiment changing the seed of randoms
     for iteration in range(nIterations):
@@ -285,35 +317,3 @@ if __name__ == '__main__':
 
     df = pd.read_csv(folder_results+"sim_trace.csv")
     print("Number of requests handled by deployed services: %i"%len(df))
-
-    dfapp2 = df[df.app == 2].copy() # a new df with the requests handled by app 2
-    print(dfapp2.head())
-    
-    dfapp2.loc[:,"transmission_time"] = dfapp2.time_emit - dfapp2.time_reception # Transmission time
-    dfapp2.loc[:,"service_time"] = dfapp2.time_out - dfapp2.time_in
-
-    print("The average service time of app2 is: %0.3f "%dfapp2["service_time"].mean())
-
-    print("The app2 is deployed in the folling nodes: %s"%np.unique(dfapp2["TOPO.dst"]))
-    print("The number of instances of App2 deployed is: %s"%np.unique(dfapp2["DES.dst"]))
-    
-    # -----------------------
-    # PLAY WITH THIS EXAMPLE!
-    # -----------------------
-    # Add another app2-instance in allocDefinition.json file adding the next data and run the main.py file again to see the new results:
-    # {
-    #   "module_name": "2_01",
-    #   "app": 2,
-    #   "id_resource": 3
-    # },
-    ## What has happened to the results? Take a look at the network image available in the results folder to understand the "allocation" of app2-related entities.
-    
-    # ! IMPORTANT. The scheduler & routing algorithm (aka. selectorPath = DeviceSpeedAwareRouting()) chooses the instance that will attend the request according to the latency -in this case-.
-    #  For that reason, the initial instance deployed at node 0 is not used. It is further away than the instance located at node3.
-    # Add another app2-user at node 16, add the next json inside of userDefinition.json file and try again. Enjoy it! 
-    # {
-    #   "id_resource": 16,
-    #   "app": 2,
-    #   "message": "M.USER.APP.2",
-    #   "lambda": 100
-    # },
