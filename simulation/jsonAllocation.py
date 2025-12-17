@@ -28,6 +28,3 @@ class JSONPopulation(Population):
                     dist = deterministic_distribution(time, name="Deterministic")
 
                     idsrc = sim.deploy_source(app_name, id_node=idtopo, msg=msg, distribution=dist)
-
-
-

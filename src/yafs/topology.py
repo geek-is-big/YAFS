@@ -124,6 +124,12 @@ class Topology:
         valuesWTrans = {}
         for edge in data["link"]:
             try:
+                # register link consumption depending on direction since YAFS uses undirected graphs
+                nx.set_edge_attributes(self.G,
+                                       values={(edge["s"],edge["d"]): edge["WATT_TRANS"]},
+                                       name=f"WATT_TRANS_{edge['s']}-{edge['d']}")
+                 
+                # preserve default WATT attributes values, in case no directed values are specified
                 valuesWTrans[(edge["s"],edge["d"])] = edge["WATT_TRANS"]
             except KeyError:
                 valuesWTrans[(edge["s"],edge["d"])] = 0.0
@@ -132,6 +138,12 @@ class Topology:
         valuesWRecv = {}
         for edge in data["link"]:
             try:
+                # register link consumption depending on direction since YAFS uses undirected graphs
+                nx.set_edge_attributes(self.G,
+                                       values={(edge["s"],edge["d"]): edge["WATT_RECV"]},
+                                       name=f"WATT_RECV_{edge['s']}-{edge['d']}")
+
+                # preserve default WATT attributes values, in case no directed values are specified
                 valuesWRecv[(edge["s"],edge["d"])] = edge["WATT_RECV"]
             except KeyError:
                 valuesWRecv[(edge["s"],edge["d"])] = valuesWTrans[(edge["s"],edge["d"])]

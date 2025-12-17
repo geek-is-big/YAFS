@@ -80,10 +80,19 @@ class Stats:
                 src = link[0]
                 dst = link[1]
                 time_link = df_link_grouped.loc[link].latency
-                watt_trans = linkInfo[(src,dst)]["WATT_TRANS"]
+                
+                try:
+                    watt_trans = linkInfo[(src,dst)][f"WATT_TRANS_{src}-{dst}"]
+                except KeyError:
+                    watt_trans = linkInfo[(src,dst)]["WATT_TRANS"]
                 energy_trans = time_link * watt_trans
-                watt_recv = linkInfo[(src,dst)]["WATT_RECV"]
+                
+                try:
+                    watt_recv = linkInfo[(src,dst)][f"WATT_RECV_{src}-{dst}"]
+                except KeyError:
+                    watt_recv = linkInfo[(src,dst)]["WATT_RECV"]
                 energy_recv = time_link * watt_recv
+
                 if src not in results:
                     results[src] = {"model": nodeInfo[src]["model"], "type": nodeInfo[src]["type"],
                                     "watt_trans":0.0, "watt_recv":0.0}
@@ -147,21 +156,21 @@ class Stats:
                 print ("\t\t%i - %s :\t %f" % (i, str(loop), results[i] * multiplier))
 
         print ("\tEnergy Consumed (WATTS by UpTime):")
-        values = self.get_watt(total_time, topology, Metrics.WATT_UPTIME)
-        for node in values:
-            print ("\t\t%i - %s :\t %.2f" % (node, values[node]["model"], values[node]["watt"] * multiplier))
+        values = dict(sorted(self.get_watt(total_time, topology, Metrics.WATT_UPTIME).items()))
+        for k, node in values.items():
+            print ("\t\t%i - %s :\t %.6f" % (k, node["model"], node["watt"] * multiplier))
 
         print ("\tEnergy Consumed by Service (WATTS by Service Time):")
-        values = self.get_watt(total_time, topology, Metrics.WATT_SERVICE)
-        for node in values:
-            print ("\t\t%i - %s :\t %.2f" % (node, values[node]["model"], values[node]["watt"] * multiplier))
+        values = dict(sorted(self.get_watt(total_time, topology, Metrics.WATT_SERVICE).items()))
+        for k, node in values.items():
+            print ("\t\t%i - %s :\t %.6f" % (k, node["model"], node["watt"] * multiplier))
 
         print ("\tEnergy Consumed by Transmission Link (WATTS by Link Time):")
-        values = self.get_watt(total_time, topology, Metrics.WATT_LINK)
-        for node in values:
-            print ("\t\t%i - %s :\t Transmit: %.2f  Recv: %.2f" % (node, values[node]["model"],
-                                                        values[node]["watt_trans"] * multiplier,
-                                                        values[node]["watt_recv"] * multiplier))
+        values = dict(sorted(self.get_watt(total_time, topology, Metrics.WATT_LINK).items()))
+        for k, node in values.items():
+            print ("\t\t%i - %s :\t Transmit: %.6f  Recv: %.6f" % (k, node["model"],
+                                                        node["watt_trans"] * multiplier,
+                                                        node["watt_recv"] * multiplier))
 
         # print ("\tCost of execution in cloud:")
         # total, values = self.get_cost_cloud(topology)
