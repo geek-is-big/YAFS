@@ -1,0 +1,105 @@
+{
+    "name": "CityScenario",
+    "message": [
+        {
+            "id": 0,
+            "name": "M.TASK1.TCP.Generation",
+            "s": "None",
+            "d": "EcgSensor",
+            "instructions": 0,
+            "bytes": 36864
+        },
+        {
+            "id": 1,
+            "name": "M.TASK1.TCP.ECG-EDGE",
+            "s": "EcgSensor",
+            "d": "Mobile",
+            "instructions": 500000000,
+            "bytes": 36864
+        },
+        {
+            "id": 2,
+            "name": "M.TASK1.TCP.EDGE-FOG-RESULT",
+            "s": "Mobile",
+            "d": "Fog",
+            "instructions": 0,
+            "bytes": 740
+        },
+        {
+            "id": 3,
+            "name": "M.TASK1.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 740
+        },
+        {
+            "id": 4,
+            "name": "M.TASK1.TCP.ECG-FOG",
+            "s": "EcgSensor",
+            "d": "Fog",
+            "instructions": 500000000,
+            "bytes": 36864
+        },
+        {
+            "id": 5,
+            "name": "M.TASK1.TCP.FOG-EDGE-RESULT",
+            "s": "Fog",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 740
+        }
+    ],
+    "transmission": [
+        {
+            "module": "EcgSensor",
+            "message_in": "M.TASK1.TCP.Generation",
+            "message_out": "M.TASK1.TCP.ECG-EDGE",
+            "mode": "EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK1.TCP.ECG-EDGE",
+            "message_out": "M.TASK1.TCP.EDGE-FOG-RESULT",
+            "mode": "EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK1.TCP.EDGE-FOG-RESULT",
+            "message_out": "M.TASK1.TCP.FOG-CLOUD-RESULT",
+            "mode": "EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "EcgSensor",
+            "message_in": "M.TASK1.TCP.Generation",
+            "message_out": "M.TASK1.TCP.ECG-FOG",
+            "mode": "FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK1.TCP.ECG-FOG",
+            "message_out": "M.TASK1.TCP.FOG-EDGE-RESULT",
+            "mode": "FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK1.TCP.ECG-FOG",
+            "message_out": "M.TASK1.TCP.FOG-CLOUD-RESULT",
+            "mode": "FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK1.TCP.FOG-CLOUD-RESULT"
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK1.TCP.FOG-EDGE-RESULT"
+        }
+    ]
+}
