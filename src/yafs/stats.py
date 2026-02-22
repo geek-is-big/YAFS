@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from pathlib import Path
 
 from yafs.metrics import Metrics
 
@@ -9,6 +10,14 @@ class Stats:
     def __init__(self,defaultPath="result"):
         self.df_link = pd.read_csv(defaultPath + "_link.csv")
         self.df = pd.read_csv(defaultPath + ".csv")
+        self.df_offloading = None
+        base = Path(defaultPath)
+        name = base.name
+        if name.startswith("sim_trace_"):
+            tag = name[len("sim_trace_"):]
+            offloading_path = base.with_name(f"offloading_decisions_{tag}.csv")
+            if offloading_path.exists():
+                self.df_offloading = pd.read_csv(offloading_path)
 
 
     def bytes_transmitted(self):
@@ -101,6 +110,49 @@ class Stats:
                                     "watt_trans":0.0, "watt_recv":0.0}
                 results[src]["watt_trans"] += energy_trans
                 results[dst]["watt_recv"] += energy_recv
+
+            if self.df_offloading is not None:
+                needed = {
+                    "current_mobile_topology_id",
+                    "current_fog_topology_id",
+                }
+                if needed.issubset(set(self.df_offloading.columns)):
+                    df_off = self.df_offloading.copy()
+                    if "sim_time_s" in df_off.columns:
+                        df_off = df_off.sort_values("sim_time_s")
+
+                    if {"migration_edge_energy_wh", "migration_fog_energy_wh"}.issubset(df_off.columns):
+                        edge_wh_series = df_off["migration_edge_energy_wh"].fillna(0.0).astype(float)
+                        fog_wh_series = df_off["migration_fog_energy_wh"].fillna(0.0).astype(float)
+                    else:
+                        edge_wh_series = pd.Series(0.0, index=df_off.index)
+                        fog_wh_series = pd.Series(0.0, index=df_off.index)
+
+                    for idx, row in df_off.iterrows():
+                        edge_id = row.get("current_mobile_topology_id", np.nan)
+                        fog_id = row.get("current_fog_topology_id", np.nan)
+                        edge_wh = float(edge_wh_series.loc[idx])
+                        fog_wh = float(fog_wh_series.loc[idx])
+
+                        if pd.isna(edge_id) or pd.isna(fog_id):
+                            continue
+
+                        edge_id = int(edge_id)
+                        fog_id = int(fog_id)
+                        if edge_id not in nodeInfo or fog_id not in nodeInfo:
+                            continue
+
+                        if edge_id not in results:
+                            results[edge_id] = {"model": nodeInfo[edge_id]["model"], "type": nodeInfo[edge_id]["type"],
+                                                "watt_trans":0.0, "watt_recv":0.0}
+                        if fog_id not in results:
+                            results[fog_id] = {"model": nodeInfo[fog_id]["model"], "type": nodeInfo[fog_id]["type"],
+                                               "watt_trans":0.0, "watt_recv":0.0}
+
+                        if not pd.isna(edge_wh):
+                            results[edge_id]["watt_trans"] += float(edge_wh)
+                        if not pd.isna(fog_wh):
+                            results[fog_id]["watt_recv"] += float(fog_wh)
         else:
             for node_key in nodeInfo:
                 if not nodeInfo[node_key]["uptime"][1]:
@@ -222,5 +274,3 @@ class Stats:
         h["module"] = g[g.module == service].module
         h["utilization"] = g[g.module == service]["service"]["sum"]*100 / time
         return h
-
-

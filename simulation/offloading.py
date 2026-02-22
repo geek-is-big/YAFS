@@ -37,7 +37,7 @@ APP_NAME = "CityScenario"
 TIME_UNIT = TimeUnit.SECOND
 USER_SPEED_MPS = 1.4
 SIM_STEP_SECONDS = 1
-ENABLE_ANIMATION = True
+ENABLE_ANIMATION = False
 ANIMATION_STEP_STRIDE = 5
 ANIMATION_MAX_FRAMES = 300
 ANIMATION_FORMAT = "gif"  # "mp4" or "gif"
@@ -360,7 +360,7 @@ def sensor_wifi_energy_wh_per_mb(rssi_dbm: float, throughput_mb_s: float) -> Tup
 
 def sensor_ble_energy_wh_per_mb() -> Tuple[float, float, float]:
     """
-    Sensor BLE per-MB energy model (data + tail).
+    Sensor BLE energy model (sensor-side TX data + tail).
     """
     # Characterizing Smartwatch Usage in the Wild - DOI: 10.1145/3081333.3081351
     # Sensors could be connected via BLE with Edge device, with typical distance around 0.5m
@@ -368,7 +368,7 @@ def sensor_ble_energy_wh_per_mb() -> Tuple[float, float, float]:
     data_wh_per_mb = energy_wh_per_mb(
         throughput_mb_s=ips_to_ipt(SENSOR_BLE_DATA_BW_MBPS),
         tx_power_w=SENSOR_BLE_TX_POWER_W,
-        rx_power_w=SENSOR_BLE_RX_POWER_W,
+        rx_power_w=0.0,
     )
     tail_wh = fixed_overhead_energy_wh(SENSOR_BLE_TAIL_POWER_W, SENSOR_BLE_TAIL_TIME_S)
     total_wh_per_mb = data_wh_per_mb + tail_wh
@@ -541,6 +541,9 @@ class MobilityDistanceMonitor:
             wifi_bw_mb_s = wifi_throughput_mbps_from_rssi(rssi_dbm)
             tcp_retx_rate = tcp_retransmission_rate_from_rssi(rssi_dbm)
             tcp_expected_retries = expected_tcp_retries_per_packet(tcp_retx_rate)
+
+            # TODO: delete and rewrite this part significantly - retransmission rate should
+            #       be added in core to affect the actual message delivery time and energy, not just estimated here in the monitor.
             # Approximation: each retransmission adds one RTT.
             tcp_expected_extra_latency_tu = tcp_expected_retries * seconds_to_tu(WIFI_RETRANSMISSION_RTT_S)
             tcp_expected_extra_latency_s = tu_to_seconds(tcp_expected_extra_latency_tu)
@@ -551,6 +554,9 @@ class MobilityDistanceMonitor:
             tx_power_w, rx_power_w = galaxy_s4_wifi_powers_w_from_rssi(rssi_dbm)
             tail_energy_wh = tail_energy_wh_per_transfer()
 
+            # TODO: Review the energy_wh_per_mb() usage, since it's wrong to take avarage from TX and RX powers
+            #       and then apply the resulted value to calculate energy for both sides.
+            #       Insted we should calculate TX and RX energies separately and add them to different components of the final energy model.
             udp_energy_wh_per_mb = energy_wh_per_mb(
                 throughput_mb_s=udp_effective_bw_mb_s,
                 tx_power_w=tx_power_w,
@@ -688,8 +694,12 @@ class OffloadingDecisionMonitor:
         # E objective term.
         # EDGE mode:
         # sensor tx(BLE) + edge rx(BLE) + edge processing + edge tx->fog(WiFi).
-        sensor_ble_tx_wh = watt_to_wpt(SENSOR_BLE_TX_POWER_W) * (task_input_mb / max(ble_bw_mb_s, 1e-12))
-        edge_ble_rx_wh = watt_to_wpt(SENSOR_BLE_RX_POWER_W) * (task_input_mb / max(ble_bw_mb_s, 1e-12))
+        ble_transfer_tu = task_input_mb / max(ble_bw_mb_s, 1e-12)
+        _, sensor_ble_data_wh_per_mb, sensor_ble_tail_wh = sensor_ble_energy_wh_per_mb()
+        sensor_ble_tx_wh = sensor_ble_data_wh_per_mb * task_input_mb + sensor_ble_tail_wh
+        # Phone BLE receive energy includes data RX + BLE tail overhead.
+        edge_ble_rx_wh = watt_to_wpt(SENSOR_BLE_RX_POWER_W) * ble_transfer_tu
+        edge_ble_rx_wh += fixed_overhead_energy_wh(SENSOR_BLE_TAIL_POWER_W, SENSOR_BLE_TAIL_TIME_S)
         edge_proc_wh = watt_to_wpt(1.3) * proc_delay_edge
         edge_wifi_tx_w, edge_wifi_rx_w = galaxy_s4_wifi_powers_w_from_rssi(rssi_fog_dbm)
         edge_tx_to_fog_wh = watt_to_wpt(edge_wifi_tx_w) * (task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
@@ -704,8 +714,8 @@ class OffloadingDecisionMonitor:
             sensor_tx_to_fog_wh += fixed_overhead_energy_wh(SENSOR_WIFI_PROMOTION_POWER_W, SENSOR_WIFI_PROMOTION_TIME_S)
             sensor_tx_to_fog_wh += fixed_overhead_energy_wh(SENSOR_WIFI_TAIL_POWER_W, SENSOR_WIFI_TAIL_TIME_S)
         else:
-            # Infeasible link for sensor WiFi at weak RSSI.
-            sensor_tx_to_fog_wh = 1e9
+            # Keep physical energy values clean for reporting/plots.
+            sensor_tx_to_fog_wh = 0.0
 
         edge_rx_from_fog_wh = watt_to_wpt(edge_wifi_rx_w) * (task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
         edge_rx_from_fog_wh += tail_energy_wh_per_transfer()
@@ -713,18 +723,38 @@ class OffloadingDecisionMonitor:
 
         c_edge = ALPHA_LATENCY * latency_edge + BETA_ENERGY * energy_edge
         c_fog = ALPHA_LATENCY * latency_fog + BETA_ENERGY * energy_fog
-        chosen_mode = solve_lp_two_mode(c_edge, c_fog)
+        # Hard feasibility constraint: if sensor->fog WiFi is unavailable, FOG mode is forbidden.
+        if not sensor_wifi_available:
+            chosen_mode = "EDGE"
+        else:
+            chosen_mode = solve_lp_two_mode(c_edge, c_fog)
 
-        migration_energy_wh = 0.0
-        if chosen_mode != self.last_mode:
-            if chosen_mode == "FOG":
-                # EDGE -> FOG: state goes from edge to fog, charge edge TX energy.
-                migration_energy_wh = watt_to_wpt(edge_wifi_tx_w) * (migration_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
-                migration_energy_wh += tail_energy_wh_per_transfer()
-            else:
-                # FOG -> EDGE: state returns from fog to edge, charge edge RX energy.
-                migration_energy_wh = watt_to_wpt(edge_wifi_rx_w) * (migration_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
-                migration_energy_wh += tail_energy_wh_per_transfer()
+        migration_edge_energy_wh = 0.0
+        migration_fog_energy_wh = 0.0
+        # Migration happens only when offloading starts: EDGE -> FOG.
+        # Returning execution to EDGE does not migrate the task binary/state back.
+        if chosen_mode != self.last_mode and chosen_mode == "FOG":
+            migration_time_tu = migration_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
+            # Edge side: TX + tail.
+            migration_edge_energy_wh = watt_to_wpt(edge_wifi_tx_w) * migration_time_tu
+            migration_edge_energy_wh += tail_energy_wh_per_transfer()
+            # Fog side: RX only (separate accounting for YAFS statistics aggregation).
+            # city-fog WiFi RX model is 3.7W (Achilles and the Tortoise, 802.11g/n).
+            migration_fog_energy_wh = watt_to_wpt(3.7) * migration_time_tu
+        migration_energy_wh = migration_edge_energy_wh + migration_fog_energy_wh
+
+        # log real values
+        real_energy_edge = 0.0
+        real_energy_sensors = 0.0
+        if self.last_mode == "EDGE":
+            real_energy_edge += edge_ble_rx_wh + edge_proc_wh + edge_tx_to_fog_wh
+            real_energy_sensors += sensor_ble_tx_wh
+
+            # added migration energy to edge postfactum
+            real_energy_edge += migration_edge_energy_wh
+        else:   # FOG
+            real_energy_edge +=  edge_rx_from_fog_wh
+            real_energy_sensors += sensor_tx_to_fog_wh
 
         CURRENT_EXECUTION_MODE = chosen_mode
         self.last_mode = chosen_mode
@@ -746,7 +776,11 @@ class OffloadingDecisionMonitor:
                 "objective_edge": c_edge,
                 "objective_fog": c_fog,
                 "chosen_mode": chosen_mode,
+                "migration_edge_energy_wh": migration_edge_energy_wh,
+                "migration_fog_energy_wh": migration_fog_energy_wh,
                 "migration_energy_wh": migration_energy_wh,
+                "real_energy_edge_wh": real_energy_edge,
+                "real_energy_sensors_wh": real_energy_sensors,
             }
         )
 
@@ -1112,6 +1146,83 @@ def generate_mobility_animation(
         plt.close(fig)
 
 
+def generate_energy_decision_plot(
+    decision_history_path: Path,
+    output_path: Path,
+):
+    """
+    Plot LP energy terms used for EDGE/FOG decision per simulation step.
+    """
+    if not decision_history_path.exists():
+        logging.warning("Decision history file not found: %s", decision_history_path)
+        return
+
+    df = pd.read_csv(decision_history_path)
+    required_cols = {"sim_time_s", "energy_edge_wh", "energy_fog_wh"}
+    if not required_cols.issubset(set(df.columns)):
+        logging.warning("Decision history missing required columns: %s", required_cols)
+        return
+
+    # "instant"  -> per-step power in mW
+    # "integral" -> cumulative energy in mWh
+    # "both"     -> two subplots (instant + integral)
+    plot_mode = "instant"
+
+    sim_t = df["sim_time_s"].astype(float)
+    dt_s = sim_t.diff().fillna(float(OFFLOADING_DECISION_PERIOD_S))
+    dt_s = dt_s.where(dt_s > 0.0, float(OFFLOADING_DECISION_PERIOD_S))
+    dt_h = dt_s / 3600.0
+
+    edge_wh = df["real_energy_edge_wh"].astype(float)
+    sensors_wh = df["real_energy_sensors_wh"].astype(float)
+    total_wh = edge_wh + sensors_wh
+
+    # Instantaneous power from per-step energy.
+    edge_mw = (edge_wh / dt_h) * 1000.0
+    sensors_mw = (sensors_wh / dt_h) * 1000.0
+    total_mw = (total_wh / dt_h) * 1000.0
+
+    # Integral view (cumulative energy).
+    edge_mwh_cum = edge_wh.cumsum() * 1000.0
+    sensors_mwh_cum = sensors_wh.cumsum() * 1000.0
+    total_mwh_cum = total_wh.cumsum() * 1000.0
+
+    if plot_mode == "both":
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+        ax_inst, ax_int = axes
+    else:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax_inst = ax
+        ax_int = ax
+
+    if plot_mode in ("instant", "both"):
+        ax_inst.plot(sim_t, edge_mw, label="P_edge (mW)", linewidth=1.0, color="#1f77b4")
+        # ax_inst.plot(sim_t, sensors_mw, label="P_sensors (mW)", linewidth=1.0, color="#ff7f0e")
+        # ax_inst.plot(sim_t, total_mw, label="P_total (mW)", linewidth=1.1, color="#2ca02c")
+        ax_inst.set_title(f"{APP_NAME} | {OPTIMIZATION_METHOD.upper()} | Instant Power")
+        ax_inst.set_ylabel("Power (mW)")
+        ax_inst.grid(True, alpha=0.25)
+        ax_inst.legend(loc="upper right")
+
+    if plot_mode in ("integral", "both"):
+        ax_int.plot(sim_t, edge_mwh_cum, label="E_edge cum (mWh)", linewidth=1.0, color="#1f77b4")
+        ax_int.plot(sim_t, sensors_mwh_cum, label="E_sensors cum (mWh)", linewidth=1.0, color="#ff7f0e")
+        ax_int.plot(sim_t, total_mwh_cum, label="E_total cum (mWh)", linewidth=1.1, color="#2ca02c")
+        ax_int.set_title(f"{APP_NAME} | {OPTIMIZATION_METHOD.upper()} | Integral Energy")
+        ax_int.set_ylabel("Energy (mWh)")
+        ax_int.grid(True, alpha=0.25)
+        ax_int.legend(loc="upper left")
+
+    if plot_mode == "both":
+        axes[-1].set_xlabel("Simulation step (s)")
+    else:
+        ax.set_xlabel("Simulation step (s)")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main(stop_time, it,folder_results):
     global CURRENT_EXECUTION_MODE
     CURRENT_EXECUTION_MODE = str(TASK_EXECUTION_MODE).upper()
@@ -1258,6 +1369,11 @@ def main(stop_time, it,folder_results):
             simulated_until_step=max(0, int(stop_time) - 1),
             step_stride=ANIMATION_STEP_STRIDE,
         )
+
+    generate_energy_decision_plot(
+        decision_history_path=decision_output,
+        output_path=Path(folder_results) / f"energy_decision_{sim_tag}.png",
+    )
 
     s1 = Stats(defaultPath=os.path.join(os.getcwd(), folder_results, trace_basename))
 
