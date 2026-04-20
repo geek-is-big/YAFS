@@ -8,4 +8,11 @@
         "**/__pycache__": true,
         "**/yafs.egg-info": true
     },
+
+    "python.analysis.diagnosticSeverityOverrides": {
+        "reportUnknownMemberType": "none",
+        "reportUnknownArgumentType": "none",
+        "reportUnknownVariableType": "none",
+        "reportUnknownParameterType": "none"
+    }
 }

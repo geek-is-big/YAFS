@@ -1,0 +1,37 @@
+{
+    "name": "FogScenario",
+    "link": [
+        {
+            "PR": 0,
+            "s": 3,
+            "BW": 12.5,
+            "d": 1,
+            "WATT_TRANS": 0.7399,
+            "WATT_RECV": 3.7
+        },
+        {
+            "PR": 0,
+            "s": 4,
+            "BW": 12.5,
+            "d": 1,
+            "WATT_TRANS": 0.7399,
+            "WATT_RECV": 3.7
+        },
+        {
+            "PR": 0,
+            "s": 1,
+            "BW": 12.5,
+            "d": 2,
+            "WATT_RECV": 0.451,
+            "WATT_TRANS": 4.9
+        },
+        {
+            "PR": 0,
+            "s": 1,
+            "BW": 12.5,
+            "d": 0,
+            "WATT_TRANS": 4.9,
+            "WATT_RECV": 5
+        }
+    ]
+}

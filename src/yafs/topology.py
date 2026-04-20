@@ -17,6 +17,9 @@ class Topology:
     LINK_PR = "PR"
     "Link feauture:  Propagation delay"
 
+    LINK_RTR = "RTR"
+    "Link feature: Retransmission rate in range [0,1]"
+
     # LINK_LATENCY = "LATENCY"
     # " A edge or a network link has a Bandwidth"
 
@@ -118,7 +121,14 @@ class Topology:
         """
         self.G = nx.Graph()
         for edge in data["link"]:
-            self.G.add_edge(edge["s"], edge["d"], BW=edge[self.LINK_BW],PR=edge[self.LINK_PR])
+            rtr = min(max(float(edge.get(self.LINK_RTR, 0.0)), 0.0), 1.0)
+            self.G.add_edge(
+                edge["s"],
+                edge["d"],
+                BW=edge[self.LINK_BW],
+                PR=edge[self.LINK_PR],
+                RTR=rtr,
+            )
 
         # Adding custom WATT LINK attributes if exist
         valuesWTrans = {}
@@ -146,8 +156,37 @@ class Topology:
                 # preserve default WATT attributes values, in case no directed values are specified
                 valuesWRecv[(edge["s"],edge["d"])] = edge["WATT_RECV"]
             except KeyError:
-                valuesWRecv[(edge["s"],edge["d"])] = valuesWTrans[(edge["s"],edge["d"])]
+                    valuesWRecv[(edge["s"],edge["d"])] = valuesWTrans[(edge["s"],edge["d"])]
         nx.set_edge_attributes(self.G, values=valuesWRecv, name="WATT_RECV")
+
+        # Optional directed tail-energy attributes (Wh per transfer event)
+        for edge in data["link"]:
+            for key, name in (("TAIL_TRANS", "TAIL_TRANS"), ("TAIL_RECV", "TAIL_RECV")):
+                src = edge["s"]
+                dst = edge["d"]
+                directed = edge.get(f"{key}_{src}-{dst}", edge.get(key, 0.0))
+                try:
+                    directed = float(directed)
+                except (TypeError, ValueError):
+                    directed = 0.0
+                nx.set_edge_attributes(
+                    self.G,
+                    values={(src, dst): directed},
+                    name=f"{name}_{src}-{dst}",
+                )
+            # Preserve any explicitly provided directed edge attributes.
+            for attr_name, attr_val in edge.items():
+                if attr_name.startswith("WATT_TRANS_") or attr_name.startswith("WATT_RECV_") \
+                        or attr_name.startswith("TAIL_TRANS_") or attr_name.startswith("TAIL_RECV_"):
+                    try:
+                        attr_val = float(attr_val)
+                    except (TypeError, ValueError):
+                        attr_val = 0.0
+                    nx.set_edge_attributes(
+                        self.G,
+                        values={(edge["s"], edge["d"]): attr_val},
+                        name=attr_name,
+                    )
 
 
         #TODO This part can be removed in next versions
@@ -178,7 +217,61 @@ class Topology:
     def load_all_node_attr(self,data):
         self.G = nx.Graph()
         for edge in data["link"]:
-            self.G.add_edge(edge["s"], edge["d"], BW=edge[self.LINK_BW], PR=edge[self.LINK_PR])
+            rtr = min(max(float(edge.get(self.LINK_RTR, 0.0)), 0.0), 1.0)
+            self.G.add_edge(
+                edge["s"],
+                edge["d"],
+                BW=edge[self.LINK_BW],
+                PR=edge[self.LINK_PR],
+                RTR=rtr,
+            )
+            src = edge["s"]
+            dst = edge["d"]
+            if "WATT_TRANS" in edge:
+                nx.set_edge_attributes(
+                    self.G,
+                    values={(src, dst): edge["WATT_TRANS"]},
+                    name=f"WATT_TRANS_{src}-{dst}",
+                )
+                nx.set_edge_attributes(
+                    self.G,
+                    values={(src, dst): edge["WATT_TRANS"]},
+                    name="WATT_TRANS",
+                )
+            if "WATT_RECV" in edge:
+                nx.set_edge_attributes(
+                    self.G,
+                    values={(src, dst): edge["WATT_RECV"]},
+                    name=f"WATT_RECV_{src}-{dst}",
+                )
+                nx.set_edge_attributes(
+                    self.G,
+                    values={(src, dst): edge["WATT_RECV"]},
+                    name="WATT_RECV",
+                )
+            for key, name in (("TAIL_TRANS", "TAIL_TRANS"), ("TAIL_RECV", "TAIL_RECV")):
+                directed = edge.get(f"{key}_{src}-{dst}", edge.get(key, 0.0))
+                try:
+                    directed = float(directed)
+                except (TypeError, ValueError):
+                    directed = 0.0
+                nx.set_edge_attributes(
+                    self.G,
+                    values={(src, dst): directed},
+                    name=f"{name}_{src}-{dst}",
+                )
+            for attr_name, attr_val in edge.items():
+                if attr_name.startswith("WATT_TRANS_") or attr_name.startswith("WATT_RECV_") \
+                        or attr_name.startswith("TAIL_TRANS_") or attr_name.startswith("TAIL_RECV_"):
+                    try:
+                        attr_val = float(attr_val)
+                    except (TypeError, ValueError):
+                        attr_val = 0.0
+                    nx.set_edge_attributes(
+                        self.G,
+                        values={(src, dst): attr_val},
+                        name=attr_name,
+                    )
 
         dc = {str(x): {} for x in data["entity"][0].keys()}
         for ent in data["entity"]:
@@ -277,5 +370,3 @@ class Topology:
 
         self.G.remove_node(id_node)
         return self.size()
-
-

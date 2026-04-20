@@ -270,15 +270,65 @@ class Sim:
                 #size_bits = message.bytes * 8
                 try:
                    # transmit = size_bits / (self.topology.get_edge(link)[Topology.LINK_BW] * 1000000.0)  # MBITS!
-                    transmit = size_bits / (self.topology.get_edge(link)[Topology.LINK_BW] * 1000000.0)  # MBITS!
-                    propagation = self.topology.get_edge(link)[Topology.LINK_PR]
-                    latency_msg_link = transmit + propagation
+                    edge_data = self.topology.get_edge(link)
+                    transmit = size_bits / (edge_data[Topology.LINK_BW] * 1000000.0)  # MBITS!
+                    propagation = edge_data[Topology.LINK_PR]
+                    base_latency_msg_link = transmit + propagation
 
-                    #print "-link: %s -- lat: %d" %(link,latency_msg_link)
+                    # RTR in [0,1] is interpreted as per-attempt retransmission probability.
+                    # Apply retransmissions only to TCP traffic.
+                    link_rtr = min(max(float(edge_data.get(Topology.LINK_RTR, 0.0)), 0.0), 0.999999)
+                    is_tcp = str(getattr(message, "transport", "UDP")).upper() == "TCP"
+                    rtr = link_rtr if is_tcp else 0.0
+                    max_retransmissions = 100
+                    attempts = 1
+                    while attempts <= max_retransmissions and random.random() <= rtr:
+                        attempts += 1
+                    latency_msg_link = base_latency_msg_link * attempts
+
+                    tx_power = edge_data.get(
+                        f"WATT_TRANS_{link[0]}-{link[1]}",
+                        edge_data.get("WATT_TRANS", 0.0),
+                    )
+                    if tx_power is None or tx_power != tx_power:
+                        # check on None, NaN
+                        tx_power = edge_data.get("WATT_TRANS", 0.0)
+                    tx_wh = float(tx_power) * latency_msg_link
+
+                    rx_power = edge_data.get(
+                        f"WATT_RECV_{link[0]}-{link[1]}",
+                        edge_data.get("WATT_RECV", tx_power),
+                    )
+                    if rx_power is None or rx_power != rx_power:
+                        rx_power = edge_data.get("WATT_RECV", tx_power)
+                    rx_wh = float(rx_power) * latency_msg_link
+                    # Optional event-based tail energy per successful transfer attempt.
+                    # Values are expected to be stored in WPT*TU/Wh units at edge level.
+                    tail_tx_wh = float(edge_data.get(f"TAIL_TRANS_{link[0]}-{link[1]}", 0.0))
+                    tail_rx_wh = float(edge_data.get(f"TAIL_RECV_{link[0]}-{link[1]}", 0.0))
+
+                    print("-link: %s -- lat: %d" %(link,latency_msg_link))
 
                     # update link metrics
                     self.metrics.insert_link(
-                        {"id":message.id,"type": self.LINK_METRIC,"src":link[0],"dst":link[1],"app":message.app_name,"latency":latency_msg_link,"message": message.name,"ctime":self.env.now,"size":message.bytes,"buffer":self.network_pump})#"path":message.path})
+                        {
+                            "id": message.id,
+                            "type": self.LINK_METRIC,
+                            "src": link[0],
+                            "dst": link[1],
+                            "app": message.app_name,
+                            "latency": latency_msg_link,
+                            "message": message.name,
+                            "ctime": self.env.now,
+                            "size": message.bytes * attempts,
+                            "buffer": self.network_pump,
+                            "rtr": rtr,
+                            "attempts": attempts,
+                            "tx_wh": tx_wh,
+                            "rx_wh": rx_wh,
+                            "tail_tx_wh": tail_tx_wh,
+                            "tail_rx_wh": tail_rx_wh,
+                        })#"path":message.path})
 
                     # We compute the future latency considering the current utilization of the link
                     if last_used < self.env.now:

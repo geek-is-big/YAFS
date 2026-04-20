@@ -26,12 +26,13 @@ class Message:
         app_name (str): the name of the application
     """
 
-    def __init__(self, name, src, dst, instructions=0, bytes=0,broadcasting=False):
+    def __init__(self, name, src, dst, instructions=0, bytes=0, broadcasting=False, transport="UDP"):
         self.name = name
         self.src = src
         self.dst = dst
         self.inst = instructions
         self.bytes = bytes
+        self.transport = str(transport).upper()
 
         self.timestamp = 0
         self.path = []

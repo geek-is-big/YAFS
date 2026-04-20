@@ -85,22 +85,35 @@ class Stats:
         elif by == Metrics.WATT_LINK:
             linkInfo = topology.get_edges()
             df_link_grouped = self.df_link.groupby(["src","dst"]).agg({"latency":"sum"})
+            direct_link_energy_enabled = {"tx_wh", "rx_wh"}.issubset(set(self.df_link.columns))
+            if direct_link_energy_enabled:
+                df_energy_grouped = self.df_link.groupby(["src","dst"]).agg({"tx_wh":"sum", "rx_wh":"sum"})
+            tail_enabled = {"tail_tx_wh", "tail_rx_wh"}.issubset(set(self.df_link.columns))
+            if tail_enabled:
+                df_tail_grouped = self.df_link.groupby(["src","dst"]).agg({"tail_tx_wh":"sum", "tail_rx_wh":"sum"})
             for link in df_link_grouped.index:
                 src = link[0]
                 dst = link[1]
-                time_link = df_link_grouped.loc[link].latency
-                
-                try:
-                    watt_trans = linkInfo[(src,dst)][f"WATT_TRANS_{src}-{dst}"]
-                except KeyError:
-                    watt_trans = linkInfo[(src,dst)]["WATT_TRANS"]
-                energy_trans = time_link * watt_trans
-                
-                try:
-                    watt_recv = linkInfo[(src,dst)][f"WATT_RECV_{src}-{dst}"]
-                except KeyError:
-                    watt_recv = linkInfo[(src,dst)]["WATT_RECV"]
-                energy_recv = time_link * watt_recv
+                if direct_link_energy_enabled:
+                    energy_trans = float(df_energy_grouped.loc[link].tx_wh)
+                    energy_recv = float(df_energy_grouped.loc[link].rx_wh)
+                else:
+                    time_link = df_link_grouped.loc[link].latency
+                    try:
+                        watt_trans = linkInfo[(src,dst)][f"WATT_TRANS_{src}-{dst}"]
+                    except KeyError:
+                        watt_trans = linkInfo[(src,dst)]["WATT_TRANS"]
+                    energy_trans = time_link * watt_trans
+
+                    try:
+                        watt_recv = linkInfo[(src,dst)][f"WATT_RECV_{src}-{dst}"]
+                    except KeyError:
+                        watt_recv = linkInfo[(src,dst)]["WATT_RECV"]
+                    energy_recv = time_link * watt_recv
+
+                if tail_enabled:
+                    energy_trans += float(df_tail_grouped.loc[link].tail_tx_wh)
+                    energy_recv += float(df_tail_grouped.loc[link].tail_rx_wh)
 
                 if src not in results:
                     results[src] = {"model": nodeInfo[src]["model"], "type": nodeInfo[src]["type"],
@@ -207,17 +220,17 @@ class Stats:
             for i, loop in enumerate(time_loops):
                 print ("\t\t%i - %s :\t %f" % (i, str(loop), results[i] * multiplier))
 
-        print ("\tEnergy Consumed (WATTS by UpTime):")
+        print ("\tEnergy Consumed (Wh by UpTime):")
         values = dict(sorted(self.get_watt(total_time, topology, Metrics.WATT_UPTIME).items()))
         for k, node in values.items():
             print ("\t\t%i - %s :\t %.6f" % (k, node["model"], node["watt"] * multiplier))
 
-        print ("\tEnergy Consumed by Service (WATTS by Service Time):")
+        print ("\tEnergy Consumed by Service (Wh by Service Time):")
         values = dict(sorted(self.get_watt(total_time, topology, Metrics.WATT_SERVICE).items()))
         for k, node in values.items():
             print ("\t\t%i - %s :\t %.6f" % (k, node["model"], node["watt"] * multiplier))
 
-        print ("\tEnergy Consumed by Transmission Link (WATTS by Link Time):")
+        print ("\tEnergy Consumed by Transmission Link (Wh by Link Time):")
         values = dict(sorted(self.get_watt(total_time, topology, Metrics.WATT_LINK).items()))
         for k, node in values.items():
             print ("\t\t%i - %s :\t Transmit: %.6f  Recv: %.6f" % (k, node["model"],
@@ -229,7 +242,8 @@ class Stats:
         # print ("\t\t%.8f" % total)
 
         print ("\tNetwork bytes transmitted:")
-        print ("\t\t%.1f" % (self.bytes_transmitted() * multiplier))
+        bytes = self.bytes_transmitted() * multiplier
+        print ("\t\t%.1f (%.2f MiB)" % (bytes, (bytes / (1024.0 * 1024.0))))
 
 
     def showResults2(self, total_time, time_loops=None):

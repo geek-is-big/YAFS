@@ -1,0 +1,362 @@
+{
+    "name": "HybridScenario",
+    "message": [
+        {
+            "id": 0,
+            "name": "M.TASK1.TCP.Generation",
+            "s": "None",
+            "d": "EcgSensor",
+            "instructions": 0,
+            "bytes": 36864,
+            "transport": "TCP"
+        },
+        {
+            "id": 1,
+            "name": "M.TASK1.TCP.ECG-FOG",
+            "s": "EcgSensor",
+            "d": "Fog",
+            "instructions": 500000000,
+            "bytes": 36864,
+            "transport": "TCP"
+        },
+        {
+            "id": 2,
+            "name": "M.TASK1.TCP.FOG-EDGE-RESULT",
+            "s": "Fog",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 740,
+            "transport": "TCP"
+        },
+        {
+            "id": 3,
+            "name": "M.TASK1.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 740,
+            "transport": "TCP"
+        },
+        {
+            "id": 4,
+            "name": "M.TASK2.UDP.Generation",
+            "s": "None",
+            "d": "SmartWatch",
+            "instructions": 0,
+            "bytes": 512000,
+            "transport": "UDP"
+        },
+        {
+            "id": 5,
+            "name": "M.TASK2.UDP.SW-EDGE",
+            "s": "SmartWatch",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 512000,
+            "transport": "UDP"
+        },
+        {
+            "id": 6,
+            "name": "M.TASK2.UDP.EDGE-FOG",
+            "s": "Mobile",
+            "d": "Fog",
+            "instructions": 1000000000,
+            "bytes": 512000,
+            "transport": "UDP"
+        },
+        {
+            "id": 7,
+            "name": "M.TASK2.UDP.FOG-EDGE-RESULT",
+            "s": "Fog",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 4096,
+            "transport": "UDP"
+        },
+        {
+            "id": 8,
+            "name": "M.TASK2.UDP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 4096,
+            "transport": "UDP"
+        },
+        {
+            "id": 9,
+            "name": "M.TASK3.TCP.Generation",
+            "s": "None",
+            "d": "SmartWatch",
+            "instructions": 0,
+            "bytes": 10240,
+            "transport": "TCP"
+        },
+        {
+            "id": 10,
+            "name": "M.TASK3.TCP.SW-EDGE",
+            "s": "SmartWatch",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 10240,
+            "transport": "TCP"
+        },
+        {
+            "id": 11,
+            "name": "M.TASK3.TCP.EDGE-FOG",
+            "s": "Mobile",
+            "d": "Fog",
+            "instructions": 10000000,
+            "bytes": 10240,
+            "transport": "TCP"
+        },
+        {
+            "id": 12,
+            "name": "M.TASK3.TCP.FOG-EDGE-RESULT",
+            "s": "Fog",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 707,
+            "transport": "TCP"
+        },
+        {
+            "id": 13,
+            "name": "M.TASK3.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 707,
+            "transport": "TCP"
+        },
+        {
+            "name": "M.TASK4.TCP.Generation",
+            "s": "None",
+            "d": "SmartWatch",
+            "instructions": 0,
+            "bytes": 10240,
+            "transport": "TCP",
+            "id": 14
+        },
+        {
+            "name": "M.TASK4.TCP.SW-EDGE",
+            "s": "SmartWatch",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 10240,
+            "transport": "TCP",
+            "id": 15
+        },
+        {
+            "name": "M.TASK4.TCP.EDGE-FOG",
+            "s": "Mobile",
+            "d": "Fog",
+            "instructions": 10000000,
+            "bytes": 10240,
+            "transport": "TCP",
+            "id": 16
+        },
+        {
+            "name": "M.TASK4.TCP.FOG-EDGE-RESULT",
+            "s": "Fog",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 707,
+            "transport": "TCP",
+            "id": 17
+        },
+        {
+            "name": "M.TASK4.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 707,
+            "transport": "TCP",
+            "id": 18
+        },
+        {
+            "name": "M.TASK5.TCP.Generation",
+            "s": "None",
+            "d": "EcgSensor",
+            "instructions": 0,
+            "bytes": 245760,
+            "transport": "TCP",
+            "id": 19
+        },
+        {
+            "name": "M.TASK5.TCP.ECG-FOG",
+            "s": "EcgSensor",
+            "d": "Fog",
+            "instructions": 211000000,
+            "bytes": 245760,
+            "transport": "TCP",
+            "id": 20
+        },
+        {
+            "name": "M.TASK5.TCP.FOG-EDGE-RESULT",
+            "s": "Fog",
+            "d": "Mobile",
+            "instructions": 0,
+            "bytes": 17203,
+            "transport": "TCP",
+            "id": 21
+        },
+        {
+            "name": "M.TASK5.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 17203,
+            "transport": "TCP",
+            "id": 22
+        }
+    ],
+    "transmission": [
+        {
+            "module": "EcgSensor",
+            "message_in": "M.TASK1.TCP.Generation",
+            "message_out": "M.TASK1.TCP.ECG-FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK1.TCP.ECG-FOG",
+            "message_out": "M.TASK1.TCP.FOG-EDGE-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK1.TCP.ECG-FOG",
+            "message_out": "M.TASK1.TCP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "SmartWatch",
+            "message_in": "M.TASK2.UDP.Generation",
+            "message_out": "M.TASK2.UDP.SW-EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK2.UDP.SW-EDGE",
+            "message_out": "M.TASK2.UDP.EDGE-FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK2.UDP.EDGE-FOG",
+            "message_out": "M.TASK2.UDP.FOG-EDGE-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK2.UDP.EDGE-FOG",
+            "message_out": "M.TASK2.UDP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "SmartWatch",
+            "message_in": "M.TASK3.TCP.Generation",
+            "message_out": "M.TASK3.TCP.SW-EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK3.TCP.SW-EDGE",
+            "message_out": "M.TASK3.TCP.EDGE-FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK3.TCP.EDGE-FOG",
+            "message_out": "M.TASK3.TCP.FOG-EDGE-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK3.TCP.EDGE-FOG",
+            "message_out": "M.TASK3.TCP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK1.TCP.FOG-EDGE-RESULT"
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK2.UDP.FOG-EDGE-RESULT"
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK3.TCP.FOG-EDGE-RESULT"
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK1.TCP.FOG-CLOUD-RESULT"
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK2.UDP.FOG-CLOUD-RESULT"
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK3.TCP.FOG-CLOUD-RESULT"
+        },
+        {
+            "module": "SmartWatch",
+            "message_in": "M.TASK4.TCP.Generation",
+            "message_out": "M.TASK4.TCP.SW-EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK4.TCP.SW-EDGE",
+            "message_out": "M.TASK4.TCP.EDGE-FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK4.TCP.EDGE-FOG",
+            "message_out": "M.TASK4.TCP.FOG-EDGE-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK4.TCP.EDGE-FOG",
+            "message_out": "M.TASK4.TCP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "EcgSensor",
+            "message_in": "M.TASK5.TCP.Generation",
+            "message_out": "M.TASK5.TCP.ECG-FOG",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK5.TCP.ECG-FOG",
+            "message_out": "M.TASK5.TCP.FOG-EDGE-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK5.TCP.ECG-FOG",
+            "message_out": "M.TASK5.TCP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK4.TCP.FOG-EDGE-RESULT"
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK5.TCP.FOG-EDGE-RESULT"
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK4.TCP.FOG-CLOUD-RESULT"
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK5.TCP.FOG-CLOUD-RESULT"
+        }
+    ]
+}

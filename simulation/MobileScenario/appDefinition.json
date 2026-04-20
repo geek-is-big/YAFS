@@ -1,5 +1,5 @@
 {
-    "name": "CityScenario",
+    "name": "MobileScenario",
     "message": [
         {
             "id": 0,
@@ -39,25 +39,6 @@
         },
         {
             "id": 4,
-            "name": "M.TASK1.TCP.ECG-FOG",
-            "s": "EcgSensor",
-            "d": "Fog",
-            "instructions": 500000000,
-            "bytes": 36864,
-            "transport": "TCP"
-        },
-        {
-            "id": 5,
-            "name": "M.TASK1.TCP.FOG-EDGE-RESULT",
-            "s": "Fog",
-            "d": "Mobile",
-            "instructions": 0,
-            "bytes": 740,
-            "transport": "TCP"
-        },
-
-        {
-            "id": 6,
             "name": "M.TASK2.UDP.Generation",
             "s": "None",
             "d": "SmartWatch",
@@ -66,16 +47,16 @@
             "transport": "UDP"
         },
         {
-            "id": 7,
+            "id": 5,
             "name": "M.TASK2.UDP.SW-EDGE",
             "s": "SmartWatch",
             "d": "Mobile",
             "instructions": 1000000000,
-            "bytes": 262144,
+            "bytes": 512000,
             "transport": "UDP"
         },
         {
-            "id": 8,
+            "id": 6,
             "name": "M.TASK2.UDP.EDGE-FOG-RESULT",
             "s": "Mobile",
             "d": "Fog",
@@ -84,16 +65,7 @@
             "transport": "UDP"
         },
         {
-            "id": 9,
-            "name": "M.TASK2.UDP.SW-FOG",
-            "s": "SmartWatch",
-            "d": "Fog",
-            "instructions": 1000000000,
-            "bytes": 262144,
-            "transport": "UDP"
-        },
-        {
-            "id": 10,
+            "id": 7,
             "name": "M.TASK2.UDP.FOG-CLOUD-RESULT",
             "s": "Fog",
             "d": "Cloud",
@@ -102,17 +74,7 @@
             "transport": "UDP"
         },
         {
-            "id": 11,
-            "name": "M.TASK2.UDP.FOG-EDGE-RESULT",
-            "s": "Fog",
-            "d": "Mobile",
-            "instructions": 0,
-            "bytes": 4096,
-            "transport": "UDP"
-        },
-
-        {
-            "id": 12,
+            "id": 8,
             "name": "M.TASK3.TCP.Generation",
             "s": "None",
             "d": "SmartWatch",
@@ -121,16 +83,16 @@
             "transport": "TCP"
         },
         {
-            "id": 13,
+            "id": 9,
             "name": "M.TASK3.TCP.SW-EDGE",
             "s": "SmartWatch",
             "d": "Mobile",
             "instructions": 10000000,
-            "bytes": 51200,
+            "bytes": 10240,
             "transport": "TCP"
         },
         {
-            "id": 14,
+            "id": 10,
             "name": "M.TASK3.TCP.EDGE-FOG-RESULT",
             "s": "Mobile",
             "d": "Fog",
@@ -139,16 +101,7 @@
             "transport": "TCP"
         },
         {
-            "id": 15,
-            "name": "M.TASK3.TCP.SW-FOG",
-            "s": "SmartWatch",
-            "d": "Fog",
-            "instructions": 10000000,
-            "bytes": 51200,
-            "transport": "TCP"
-        },
-        {
-            "id": 16,
+            "id": 11,
             "name": "M.TASK3.TCP.FOG-CLOUD-RESULT",
             "s": "Fog",
             "d": "Cloud",
@@ -157,13 +110,76 @@
             "transport": "TCP"
         },
         {
-            "id": 17,
-            "name": "M.TASK3.TCP.FOG-EDGE-RESULT",
-            "s": "Fog",
+            "name": "M.TASK4.TCP.Generation",
+            "s": "None",
+            "d": "SmartWatch",
+            "instructions": 0,
+            "bytes": 10240,
+            "transport": "TCP",
+            "id": 12
+        },
+        {
+            "name": "M.TASK4.TCP.SW-EDGE",
+            "s": "SmartWatch",
             "d": "Mobile",
+            "instructions": 10000000,
+            "bytes": 10240,
+            "transport": "TCP",
+            "id": 13
+        },
+        {
+            "name": "M.TASK4.TCP.EDGE-FOG-RESULT",
+            "s": "Mobile",
+            "d": "Fog",
             "instructions": 0,
             "bytes": 707,
-            "transport": "TCP"
+            "transport": "TCP",
+            "id": 14
+        },
+        {
+            "name": "M.TASK4.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 707,
+            "transport": "TCP",
+            "id": 15
+        },
+        {
+            "name": "M.TASK5.TCP.Generation",
+            "s": "None",
+            "d": "EcgSensor",
+            "instructions": 0,
+            "bytes": 245760,
+            "transport": "TCP",
+            "id": 16
+        },
+        {
+            "name": "M.TASK5.TCP.ECG-EDGE",
+            "s": "EcgSensor",
+            "d": "Mobile",
+            "instructions": 211000000,
+            "bytes": 245760,
+            "transport": "TCP",
+            "id": 17
+        },
+        {
+            "name": "M.TASK5.TCP.EDGE-FOG-RESULT",
+            "s": "Mobile",
+            "d": "Fog",
+            "instructions": 0,
+            "bytes": 17203,
+            "transport": "TCP",
+            "id": 18
+        },
+        {
+            "name": "M.TASK5.TCP.FOG-CLOUD-RESULT",
+            "s": "Fog",
+            "d": "Cloud",
+            "instructions": 0,
+            "bytes": 17203,
+            "transport": "TCP",
+            "id": 19
         }
     ],
     "transmission": [
@@ -171,154 +187,111 @@
             "module": "EcgSensor",
             "message_in": "M.TASK1.TCP.Generation",
             "message_out": "M.TASK1.TCP.ECG-EDGE",
-            "mode": "EDGE",
             "fractional": 1.0
         },
         {
             "module": "Mobile",
             "message_in": "M.TASK1.TCP.ECG-EDGE",
             "message_out": "M.TASK1.TCP.EDGE-FOG-RESULT",
-            "mode": "EDGE",
             "fractional": 1.0
         },
         {
             "module": "Fog",
             "message_in": "M.TASK1.TCP.EDGE-FOG-RESULT",
             "message_out": "M.TASK1.TCP.FOG-CLOUD-RESULT",
-            "mode": "EDGE",
             "fractional": 1.0
         },
-        {
-            "module": "EcgSensor",
-            "message_in": "M.TASK1.TCP.Generation",
-            "message_out": "M.TASK1.TCP.ECG-FOG",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-        {
-            "module": "Fog",
-            "message_in": "M.TASK1.TCP.ECG-FOG",
-            "message_out": "M.TASK1.TCP.FOG-EDGE-RESULT",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-        {
-            "module": "Fog",
-            "message_in": "M.TASK1.TCP.ECG-FOG",
-            "message_out": "M.TASK1.TCP.FOG-CLOUD-RESULT",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-
         {
             "module": "SmartWatch",
             "message_in": "M.TASK2.UDP.Generation",
             "message_out": "M.TASK2.UDP.SW-EDGE",
-            "mode": "EDGE",
             "fractional": 1.0
         },
         {
             "module": "Mobile",
             "message_in": "M.TASK2.UDP.SW-EDGE",
             "message_out": "M.TASK2.UDP.EDGE-FOG-RESULT",
-            "mode": "EDGE",
             "fractional": 1.0
         },
         {
             "module": "Fog",
             "message_in": "M.TASK2.UDP.EDGE-FOG-RESULT",
             "message_out": "M.TASK2.UDP.FOG-CLOUD-RESULT",
-            "mode": "EDGE",
             "fractional": 1.0
         },
-        {
-            "module": "SmartWatch",
-            "message_in": "M.TASK2.UDP.Generation",
-            "message_out": "M.TASK2.UDP.SW-FOG",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-        {
-            "module": "Fog",
-            "message_in": "M.TASK2.UDP.SW-FOG",
-            "message_out": "M.TASK2.UDP.FOG-EDGE-RESULT",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-        {
-            "module": "Fog",
-            "message_in": "M.TASK2.UDP.SW-FOG",
-            "message_out": "M.TASK2.UDP.FOG-CLOUD-RESULT",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-
         {
             "module": "SmartWatch",
             "message_in": "M.TASK3.TCP.Generation",
             "message_out": "M.TASK3.TCP.SW-EDGE",
-            "mode": "EDGE",
             "fractional": 1.0
         },
         {
             "module": "Mobile",
             "message_in": "M.TASK3.TCP.SW-EDGE",
             "message_out": "M.TASK3.TCP.EDGE-FOG-RESULT",
-            "mode": "EDGE",
             "fractional": 1.0
         },
         {
             "module": "Fog",
             "message_in": "M.TASK3.TCP.EDGE-FOG-RESULT",
             "message_out": "M.TASK3.TCP.FOG-CLOUD-RESULT",
-            "mode": "EDGE",
             "fractional": 1.0
         },
-        {
-            "module": "SmartWatch",
-            "message_in": "M.TASK3.TCP.Generation",
-            "message_out": "M.TASK3.TCP.SW-FOG",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-        {
-            "module": "Fog",
-            "message_in": "M.TASK3.TCP.SW-FOG",
-            "message_out": "M.TASK3.TCP.FOG-EDGE-RESULT",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-        {
-            "module": "Fog",
-            "message_in": "M.TASK3.TCP.SW-FOG",
-            "message_out": "M.TASK3.TCP.FOG-CLOUD-RESULT",
-            "mode": "FOG",
-            "fractional": 1.0
-        },
-
         {
             "module": "Cloud",
             "message_in": "M.TASK1.TCP.FOG-CLOUD-RESULT"
-        },
-        {
-            "module": "Mobile",
-            "message_in": "M.TASK1.TCP.FOG-EDGE-RESULT"
         },
         {
             "module": "Cloud",
             "message_in": "M.TASK2.UDP.FOG-CLOUD-RESULT"
         },
         {
-            "module": "Mobile",
-            "message_in": "M.TASK2.UDP.FOG-EDGE-RESULT"
-        },
-        {
             "module": "Cloud",
             "message_in": "M.TASK3.TCP.FOG-CLOUD-RESULT"
         },
         {
+            "module": "SmartWatch",
+            "message_in": "M.TASK4.TCP.Generation",
+            "message_out": "M.TASK4.TCP.SW-EDGE",
+            "fractional": 1.0
+        },
+        {
             "module": "Mobile",
-            "message_in": "M.TASK3.TCP.FOG-EDGE-RESULT"
+            "message_in": "M.TASK4.TCP.SW-EDGE",
+            "message_out": "M.TASK4.TCP.EDGE-FOG-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK4.TCP.EDGE-FOG-RESULT",
+            "message_out": "M.TASK4.TCP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "EcgSensor",
+            "message_in": "M.TASK5.TCP.Generation",
+            "message_out": "M.TASK5.TCP.ECG-EDGE",
+            "fractional": 1.0
+        },
+        {
+            "module": "Mobile",
+            "message_in": "M.TASK5.TCP.ECG-EDGE",
+            "message_out": "M.TASK5.TCP.EDGE-FOG-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Fog",
+            "message_in": "M.TASK5.TCP.EDGE-FOG-RESULT",
+            "message_out": "M.TASK5.TCP.FOG-CLOUD-RESULT",
+            "fractional": 1.0
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK4.TCP.FOG-CLOUD-RESULT"
+        },
+        {
+            "module": "Cloud",
+            "message_in": "M.TASK5.TCP.FOG-CLOUD-RESULT"
         }
     ]
 }

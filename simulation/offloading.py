@@ -5,15 +5,13 @@ import os
 import time
 import json
 import random
+import argparse
 import logging.config
-from enum import Enum
-from dataclasses import dataclass
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Optional
 
 import networkx as nx
 from pathlib import Path
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter, FFMpegWriter
 
 import pandas as pd
 import numpy as np
@@ -27,78 +25,43 @@ from yafs.selection import First_ShortestPath
 from yafs.distribution import deterministic_distribution, deterministicDistributionStartPoint
 from yafs.stats import Stats
 
+import config as cfg
+from mobility import (
+    CityFogDevice,
+    MobilityModel,
+    load_city_fog_devices,
+    load_user_trace,
+)
+from placement_edge_fog import LPOptimizationPlacement
+from utils import (
+    generate_energy_decision_plot,
+    generate_mobility_animation,
+    ips_to_ipt,
+    seconds_to_tu,
+    watt_to_wpt,
+)
+
 # from jsonAllocation import JSONPopulation
 
-class TimeUnit(Enum):
-    SECOND = 1
-    MILLISECOND = 2
+DEFAULT_APP = "MobileScenario"
+DYNAMIC_SCENARIOS = {"CityScenario"}
+STATIC_SCENARIOS = {"FogScenario", "HybridScenario", "MobileScenario"}
+ALL_SCENARIOS = {*DYNAMIC_SCENARIOS, *STATIC_SCENARIOS}
 
-APP_NAME = "CityScenario"
-TIME_UNIT = TimeUnit.SECOND
-USER_SPEED_MPS = 1.4
-SIM_STEP_SECONDS = 1
-ENABLE_ANIMATION = False
-ANIMATION_STEP_STRIDE = 5
-ANIMATION_MAX_FRAMES = 300
-ANIMATION_FORMAT = "gif"  # "mp4" or "gif"
-PRINT_NEAREST_DISTANCES = False
-NEAREST_NODES_TO_PRINT = 3
-RSSI_REFERENCE_DISTANCE_M = 1.0
-RSSI_AT_REFERENCE_DBM = -20.0
-RSSI_ENVIRONMENT_COEFF = 2.7
-WIFI_RETRANSMISSION_RTT_S = 0.03  # 30ms
-
-# WiFi throughput model (YAFS BW units are MB/s).
-WIFI_MAX_BW_MBPS = 54.0 / 8.0
-WIFI_MEDIUM_BW_MBPS = 11.0 / 8.0
-WIFI_MIN_BW_MBPS = 1.0 / 8.0
-
-# Galaxy S4 WiFi tail model.
-WIFI_TAIL_TIME_S = 0.210
-WIFI_TAIL_POWER_W = 0.289
-
-# Sensor WiFi model.
-SENSOR_WIFI_TAIL_TIME_S = 0.18
-SENSOR_WIFI_TAIL_POWER_W = 0.1212
-SENSOR_WIFI_PROMOTION_TIME_S = 0.30
-SENSOR_WIFI_PROMOTION_POWER_W = 0.2425
-
-# Sensor BLE model (sensor <-> edge, near distance ~0.5m).
-SENSOR_BLE_TAIL_TIME_S = 4.77
-SENSOR_BLE_TAIL_POWER_W = 0.0341
-SENSOR_BLE_TX_POWER_W = 0.1115
-SENSOR_BLE_RX_POWER_W = 0.1172
-SENSOR_BLE_DATA_BW_MBPS = 0.305
+APP_NAME = DEFAULT_APP
+SIMULATION_MODE = "dynamic"  # dynamic | static
 
 # Task1 profile (ECG classification)
-TASK1_ID = "Task1"
-TASK1_PERIOD_S = 10
-TASK1_COMPLEXITY_MI = 500
-TASK1_DATA_SIZE_KB = 36
-TASK1_MAX_RESPONSE_TIME_S = 15
-TASK1_CLASSIFICATION = "critical analysis"
-TASK_EXECUTION_MODE = "EDGE"  # EDGE | FOG
-CURRENT_EXECUTION_MODE = TASK_EXECUTION_MODE
-OPTIMIZATION_METHOD = "LP"
+CURRENT_EXECUTION_MODE = cfg.TASK_EXECUTION_MODE
 
 
-def node_model_name(base_name: str) -> str:
-    return f"{base_name}-{OPTIMIZATION_METHOD.lower()}"
-
-ALPHA_LATENCY = 0.0
-BETA_ENERGY = 1.0
-# OFFLOADING_DECISION_PERIOD_S = TASK1_PERIOD_S
-OFFLOADING_DECISION_PERIOD_S = 1
-TASK1_MIGRATION_STATE_SIZE_KB = 20.0
+def get_execution_mode() -> str:
+    return str(CURRENT_EXECUTION_MODE).upper()
 
 
-def get_task_processing_module() -> str:
-    mode = str(TASK_EXECUTION_MODE).upper()
-    if mode == "EDGE":
-        return "Mobile"
-    if mode == "FOG":
-        return "Fog"
-    raise ValueError(f"Unsupported TASK_EXECUTION_MODE={TASK_EXECUTION_MODE}")
+def set_execution_mode(mode: str) -> None:
+    global CURRENT_EXECUTION_MODE
+    CURRENT_EXECUTION_MODE = str(mode).upper()
 
 
 def task_mode_selectivity(threshold: float, mode: str) -> bool:
@@ -125,40 +88,28 @@ def solve_lp_two_mode(c_edge: float, c_fog: float) -> str:
     return "EDGE" if c_edge <= c_fog else "FOG"
 
 
+def infer_message_transport(message_name: str) -> str:
+    tokens = str(message_name).upper().replace("-", ".").replace("_", ".").split(".")
+    if "TCP" in tokens:
+        return "TCP"
+    if "UDP" in tokens:
+        return "UDP"
+    return "UDP"
+
+
 def build_simulation_tag() -> str:
-    alpha_str = str(ALPHA_LATENCY).replace(".", "p")
-    beta_str = str(BETA_ENERGY).replace(".", "p")
-    return f"{APP_NAME}_{OPTIMIZATION_METHOD}_a{alpha_str}_b{beta_str}"
-
-
-@dataclass
-class CityFogDevice:
-    dataset_id: int
-    topo_id: int
-    latitude: float
-    longitude: float
-    details: str
-
-
-def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """
-    Compute great-circle distance in meters.
-    """
-    r = 6371000.0  # meters
-    phi1 = np.radians(lat1)
-    phi2 = np.radians(lat2)
-    d_phi = np.radians(lat2 - lat1)
-    d_lam = np.radians(lon2 - lon1)
-
-    a = np.sin(d_phi / 2.0) ** 2 + np.cos(phi1) * np.cos(phi2) * np.sin(d_lam / 2.0) ** 2
-    return 2.0 * r * np.arctan2(np.sqrt(a), np.sqrt(1.0 - a))
+    if SIMULATION_MODE == "static":
+        return f"{APP_NAME}_static"
+    alpha_str = str(cfg.ALPHA_LATENCY).replace(".", "p")
+    beta_str = str(cfg.BETA_ENERGY).replace(".", "p")
+    return f"{APP_NAME}_{cfg.OPTIMIZATION_METHOD}_a{alpha_str}_b{beta_str}"
 
 
 def rssi_from_distance_dbm(
     distance_m: float,
-    d0_m: float = RSSI_REFERENCE_DISTANCE_M,
-    rssi0_dbm: float = RSSI_AT_REFERENCE_DBM,
-    n: float = RSSI_ENVIRONMENT_COEFF,
+    d0_m: float = cfg.RSSI_REFERENCE_DISTANCE_M,
+    rssi0_dbm: float = cfg.RSSI_AT_REFERENCE_DBM,
+    n: float = cfg.RSSI_ENVIRONMENT_COEFF,
 ) -> float:
     """
     Log-distance path loss model:
@@ -173,22 +124,6 @@ def rssi_from_distance_dbm(
     return rssi0_dbm - (10.0 * n * np.log10(effective_d / d0_m))
 
 
-def seconds_to_tu(seconds: float) -> float:
-    if TIME_UNIT == TimeUnit.SECOND:
-        return seconds
-    if TIME_UNIT == TimeUnit.MILLISECOND:
-        return seconds * 1000.0
-    raise ValueError("Unknown TIME_UNIT")
-
-
-def tu_to_seconds(time_unit_value: float) -> float:
-    if TIME_UNIT == TimeUnit.SECOND:
-        return time_unit_value
-    if TIME_UNIT == TimeUnit.MILLISECOND:
-        return time_unit_value / 1000.0
-    raise ValueError("Unknown TIME_UNIT")
-
-
 def wifi_throughput_mbps_from_rssi(rssi_dbm: float) -> float:
     """
     Throughput model from RSSI:
@@ -200,16 +135,16 @@ def wifi_throughput_mbps_from_rssi(rssi_dbm: float) -> float:
     # Characterizing and modeling the impact of wireless signal strength on smartphone battery drain
     # DOI: 10.1145/2494232.2466586
     if rssi_dbm >= -70.0:
-        return ips_to_ipt(WIFI_MAX_BW_MBPS)
+        return ips_to_ipt(cfg.WIFI_MAX_BW_MBPS)
     if rssi_dbm >= -85.0:
-        return ips_to_ipt(WIFI_MEDIUM_BW_MBPS)
+        return ips_to_ipt(cfg.WIFI_MEDIUM_BW_MBPS)
     if rssi_dbm <= -90.0:
-        return ips_to_ipt(WIFI_MIN_BW_MBPS)
+        return ips_to_ipt(cfg.WIFI_MIN_BW_MBPS)
 
     # Linear interpolation on (-90, -85) for intermediate weak-signal values.
     # rssi=-90 -> 1 Mbps, rssi=-85 -> 11 Mbps
     x = np.array([-90.0, -85.0], dtype=float)
-    y = np.array([WIFI_MIN_BW_MBPS, WIFI_MEDIUM_BW_MBPS], dtype=float)
+    y = np.array([cfg.WIFI_MIN_BW_MBPS, cfg.WIFI_MEDIUM_BW_MBPS], dtype=float)
     return ips_to_ipt(float(np.interp(rssi_dbm, x, y)))
 
 
@@ -268,36 +203,29 @@ def galaxy_s4_wifi_powers_w_from_rssi(rssi_dbm: float) -> Tuple[float, float]:
     return tx / 1000.0, rx / 1000.0
 
 
-def transport_protocol_from_message_name(message_name: str) -> str:
-    """
-    Message naming convention:
-    - names containing 'TCP' -> retransmission-aware transport
-    - names containing 'UDP' -> best-effort transport
-    - default fallback: UDP
-    """
-    upper = str(message_name).upper()
-    if "TCP" in upper:
-        return "TCP"
-    if "UDP" in upper:
-        return "UDP"
-    return "UDP"
-
-
-def expected_tcp_retries_per_packet(retransmission_rate: float) -> float:
-    """
-    Expected retries for geometric success model.
-    """
-    clamped = min(max(retransmission_rate, 0.0), 0.999999)
-    return clamped / (1.0 - clamped)
-
-
 def energy_wh_per_mb(throughput_mb_s: float, tx_power_w: float, rx_power_w: float) -> float:
     """
     One-way transfer energy (TX+RX) per transferred MB.
     """
+    tx_wh_per_mb, rx_wh_per_mb = transfer_energy_components_wh_per_mb(
+        throughput_mb_s=throughput_mb_s,
+        tx_power_w=tx_power_w,
+        rx_power_w=rx_power_w,
+    )
+    return tx_wh_per_mb + rx_wh_per_mb
+
+
+def transfer_energy_components_wh_per_mb(
+    throughput_mb_s: float, tx_power_w: float, rx_power_w: float
+) -> Tuple[float, float]:
+    """
+    One-way transfer energy components per transferred MB: (TX, RX).
+    """
     safe_bw = max(throughput_mb_s, 1e-12)
     transfer_time_tu = 1.0 / safe_bw
-    return (watt_to_wpt(tx_power_w) + watt_to_wpt(rx_power_w)) * transfer_time_tu
+    tx_wh_per_mb = watt_to_wpt(tx_power_w) * transfer_time_tu
+    rx_wh_per_mb = watt_to_wpt(rx_power_w) * transfer_time_tu
+    return tx_wh_per_mb, rx_wh_per_mb
 
 
 def fixed_overhead_energy_wh(power_w: float, duration_s: float) -> float:
@@ -308,7 +236,7 @@ def tail_energy_wh_per_transfer() -> float:
     """
     Fixed WiFi tail energy after data exchange completion.
     """
-    return watt_to_wpt(WIFI_TAIL_POWER_W) * seconds_to_tu(WIFI_TAIL_TIME_S)
+    return watt_to_wpt(cfg.WIFI_TAIL_POWER_W) * seconds_to_tu(cfg.WIFI_TAIL_TIME_S)
 
 
 def sensor_wifi_data_powers_w_from_rssi(rssi_dbm: float) -> Tuple[float, float, bool]:
@@ -322,8 +250,8 @@ def sensor_wifi_data_powers_w_from_rssi(rssi_dbm: float) -> Tuple[float, float, 
     # -55: Tx 672.8, Rx 343.0
     # -65: Tx 840.7, Rx 252.3
     # -70: hard to communicate
-    if rssi_dbm <= -70.0:
-        return np.nan, np.nan, False
+    # if rssi_dbm < -70.0:
+    #     return np.nan, np.nan, False
 
     x = np.array([-65.0, -55.0, -42.0], dtype=float)
     tx_mw = np.array([840.7, 672.8, 669.1], dtype=float)
@@ -352,8 +280,8 @@ def sensor_wifi_energy_wh_per_mb(rssi_dbm: float, throughput_mb_s: float) -> Tup
         return np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, False
 
     data_wh_per_mb = energy_wh_per_mb(throughput_mb_s, tx_w, rx_w)
-    promotion_wh = fixed_overhead_energy_wh(SENSOR_WIFI_PROMOTION_POWER_W, SENSOR_WIFI_PROMOTION_TIME_S)
-    tail_wh = fixed_overhead_energy_wh(SENSOR_WIFI_TAIL_POWER_W, SENSOR_WIFI_TAIL_TIME_S)
+    promotion_wh = fixed_overhead_energy_wh(cfg.SENSOR_WIFI_PROMOTION_POWER_W, cfg.SENSOR_WIFI_PROMOTION_TIME_S)
+    tail_wh = fixed_overhead_energy_wh(cfg.SENSOR_WIFI_TAIL_POWER_W, cfg.SENSOR_WIFI_TAIL_TIME_S)
     total_wh_per_mb = data_wh_per_mb + promotion_wh + tail_wh
     return total_wh_per_mb, data_wh_per_mb, promotion_wh, tail_wh, tx_w, rx_w, True
 
@@ -366,109 +294,156 @@ def sensor_ble_energy_wh_per_mb() -> Tuple[float, float, float]:
     # Sensors could be connected via BLE with Edge device, with typical distance around 0.5m
     # and Tx/Rx power around 110mW. BLE tail is long (4.77s) but low power (34mW).
     data_wh_per_mb = energy_wh_per_mb(
-        throughput_mb_s=ips_to_ipt(SENSOR_BLE_DATA_BW_MBPS),
-        tx_power_w=SENSOR_BLE_TX_POWER_W,
+        throughput_mb_s=ips_to_ipt(cfg.SENSOR_BLE_DATA_BW_MBPS),
+        tx_power_w=cfg.SENSOR_BLE_TX_POWER_W,
         rx_power_w=0.0,
     )
-    tail_wh = fixed_overhead_energy_wh(SENSOR_BLE_TAIL_POWER_W, SENSOR_BLE_TAIL_TIME_S)
+    tail_wh = fixed_overhead_energy_wh(cfg.SENSOR_BLE_TAIL_POWER_W, cfg.SENSOR_BLE_TAIL_TIME_S)
     total_wh_per_mb = data_wh_per_mb + tail_wh
     return total_wh_per_mb, data_wh_per_mb, tail_wh
 
 
-def interpolate_user_path(
-    waypoints: List[Tuple[float, float]],
-    speed_mps: float = USER_SPEED_MPS,
-    step_seconds: int = SIM_STEP_SECONDS,
-) -> List[Tuple[float, float]]:
+def edge_key(u: int, v: int) -> Tuple[int, int]:
+    return (u, v) if u <= v else (v, u)
+
+
+class LinkUpdateRegistry:
     """
-    Interpolates user waypoints to one position per simulation step.
+    Stores per-edge update callbacks. One callback is invoked per registered edge on each tick.
     """
-    if not waypoints:
-        return []
-    if len(waypoints) == 1:
-        return [waypoints[0]]
 
-    step_distance = speed_mps * step_seconds
-    points: List[Tuple[float, float]] = [waypoints[0]]
-    current = np.array(waypoints[0], dtype=float)
-    target_idx = 1
+    def __init__(self):
+        self._callbacks = {}
 
-    while target_idx < len(waypoints):
-        target = np.array(waypoints[target_idx], dtype=float)
-        segment_m = haversine_distance_m(current[0], current[1], target[0], target[1])
-        if segment_m <= step_distance:
-            current = target
-            points.append((float(current[0]), float(current[1])))
-            target_idx += 1
-            continue
+    def register(self, u: int, v: int, callback) -> None:
+        self._callbacks[edge_key(u, v)] = callback
 
-        ratio = step_distance / segment_m
-        current = current + ratio * (target - current)
-        points.append((float(current[0]), float(current[1])))
-
-    return points
+    def update_all(self, sim, context: dict) -> None:
+        for (u, v), callback in self._callbacks.items():
+            if not sim.topology.G.has_edge(u, v):
+                continue
+            edge_data = sim.topology.G[u][v]
+            callback(sim, u, v, edge_data, context)
 
 
-class MobilityModel:
-    def __init__(self, user_trace: List[Tuple[float, float]], fog_devices: List[CityFogDevice]):
-        self.user_trace = user_trace
-        self.fog_devices = fog_devices
-        self._nearest_cache: Dict[int, int] = {}
-
-    def user_position(self, step: int) -> Tuple[float, float]:
-        if not self.user_trace:
-            return 0.0, 0.0
-        idx = min(max(step, 0), len(self.user_trace) - 1)
-        return self.user_trace[idx]
-
-    def distances_for_step(self, step: int) -> List[Tuple[CityFogDevice, float]]:
-        lat, lon = self.user_position(step)
-        return [
-            (fog, haversine_distance_m(lat, lon, fog.latitude, fog.longitude))
-            for fog in self.fog_devices
-        ]
-
-    def nearest_fog_topology_node(self, step: int) -> Optional[int]:
-        if step in self._nearest_cache:
-            return self._nearest_cache[step]
-        distances = self.distances_for_step(step)
-        if not distances:
-            return None
-        nearest = min(distances, key=lambda item: item[1])[0].topo_id
-        self._nearest_cache[step] = nearest
-        return nearest
+def _topology_node_attr(sim, node_id: int, attr_name: str, default: str = "") -> str:
+    # Topology.load() stores full node attrs in topology.nodeAttributes, while G.nodes
+    # may contain only mandatory attrs (e.g. IPT). Keep both paths for compatibility.
+    val = sim.topology.G.nodes[node_id].get(attr_name, None)
+    if val is None:
+        node_info = sim.topology.get_info().get(node_id)
+        if node_info is None:
+            node_info = sim.topology.get_info().get(str(node_id), {})
+        val = node_info.get(attr_name, default)
+    return str(val)
 
 
-class MobilityPlacement(JSONPlacement):
-    """
-    Keeps the Fog module attached to the nearest city fog device to the moving user.
-    """
-    def __init__(self, mobility_model: MobilityModel, app_name: str, **kwargs):
-        super().__init__(**kwargs)
-        self.mobility_model = mobility_model
-        self.app_name = app_name
-        self.last_fog_topo_id = None
+def _node_model(sim, node_id: int) -> str:
+    return _topology_node_attr(sim, node_id, "model", "").lower()
 
-    def initial_allocation(self, sim, app_name):
-        super().initial_allocation(sim, app_name)
-        nearest = self.mobility_model.nearest_fog_topology_node(step=0)
-        if nearest is not None and app_name == self.app_name:
-            self._move_fog_module(sim, nearest)
 
-    def run(self, sim):
-        step = int(sim.env.now)
-        nearest = self.mobility_model.nearest_fog_topology_node(step)
-        if nearest is None or nearest == self.last_fog_topo_id:
-            return
-        self._move_fog_module(sim, nearest)
+def _node_type(sim, node_id: int) -> str:
+    return _topology_node_attr(sim, node_id, "type", "").upper()
 
-    def _move_fog_module(self, sim, new_topo_id: int) -> None:
-        deployed = list(sim.alloc_module.get(self.app_name, {}).get("Fog", []))
-        for des in deployed:
-            sim.undeploy_module(self.app_name, "Fog", des)
-        app = sim.apps[self.app_name]
-        sim.deploy_module(self.app_name, "Fog", app.services["Fog"], [new_topo_id])
-        self.last_fog_topo_id = new_topo_id
+
+def _directional_watts_or_default(edge_data: dict, src: int, dst: int) -> Tuple[float, float]:
+    tx = float(edge_data.get(f"WATT_TRANS_{src}-{dst}", edge_data.get("WATT_TRANS", 0.0)))
+    rx = float(edge_data.get(f"WATT_RECV_{src}-{dst}", edge_data.get("WATT_RECV", tx)))
+    return tx, rx
+
+
+def _update_mobile_fog_link(sim, u: int, v: int, edge_data: dict, context: dict) -> None:
+    mobile_id = u if _node_model(sim, u) == "mobile-device" else v
+    fog_id = v if mobile_id == u else u
+    state = context["wireless_by_fog"].get(fog_id)
+    if state is None:
+        return
+
+    edge_data["BW"] = state["wifi_bw_mb_s"]
+    edge_data["RTR"] = state["tcp_retx_rate"]
+
+    fog_tx_wpt, _ = _directional_watts_or_default(edge_data, fog_id, mobile_id)
+    _, fog_rx_wpt = _directional_watts_or_default(edge_data, mobile_id, fog_id)
+    edge_data[f"WATT_TRANS_{mobile_id}-{fog_id}"] = watt_to_wpt(state["mobile_tx_w"])
+    edge_data[f"WATT_RECV_{mobile_id}-{fog_id}"] = fog_rx_wpt
+    edge_data[f"WATT_TRANS_{fog_id}-{mobile_id}"] = fog_tx_wpt
+    edge_data[f"WATT_RECV_{fog_id}-{mobile_id}"] = watt_to_wpt(state["mobile_rx_w"])
+
+
+def _update_sensor_fog_link(sim, u: int, v: int, edge_data: dict, context: dict) -> None:
+    sensor_models = {"ecg-device", "smartwatch-device"}
+    sensor_id = u if _node_model(sim, u) in sensor_models else v
+    fog_id = v if sensor_id == u else u
+    state = context["wireless_by_fog"].get(fog_id)
+    if state is None:
+        return
+
+    if not state["sensor_wifi_available"]:
+        # 100 Kbps in MBps, to avoid zero division and allow some minimal connectivity for energy calculations.
+        edge_data["BW"] = 0.1 / 8
+    else:
+        edge_data["BW"] = state["wifi_bw_mb_s"]
+    edge_data["RTR"] = state["tcp_retx_rate"]
+
+    fog_tx_wpt, _ = _directional_watts_or_default(edge_data, fog_id, sensor_id)
+    _, fog_rx_wpt = _directional_watts_or_default(edge_data, sensor_id, fog_id)
+    edge_data[f"WATT_TRANS_{sensor_id}-{fog_id}"] = watt_to_wpt(state["sensor_tx_w"])
+    edge_data[f"WATT_RECV_{sensor_id}-{fog_id}"] = fog_rx_wpt
+    edge_data[f"WATT_TRANS_{fog_id}-{sensor_id}"] = fog_tx_wpt
+    edge_data[f"WATT_RECV_{fog_id}-{sensor_id}"] = watt_to_wpt(state["sensor_rx_w"])
+
+
+def _noop_link_update(sim, u: int, v: int, edge_data: dict, context: dict) -> None:
+    return
+
+
+def assign_tail_fields_by_models(link: dict, model_by_id: dict) -> None:
+    s = int(link["s"])
+    d = int(link["d"])
+    model_s = str(model_by_id.get(s, "")).lower()
+    model_d = str(model_by_id.get(d, "")).lower()
+    models = {model_s, model_d}
+
+    wifi_tail_wh = fixed_overhead_energy_wh(cfg.WIFI_TAIL_POWER_W, cfg.WIFI_TAIL_TIME_S)
+    sensor_wifi_tail_wh = fixed_overhead_energy_wh(cfg.SENSOR_WIFI_TAIL_POWER_W, cfg.SENSOR_WIFI_TAIL_TIME_S)
+    ble_tail_wh = fixed_overhead_energy_wh(cfg.SENSOR_BLE_TAIL_POWER_W, cfg.SENSOR_BLE_TAIL_TIME_S)
+
+    if {"mobile-device", "city-fog-device"} == models or {"mobile-device", "fog-device"} == models:
+        mobile_id = s if model_s == "mobile-device" else d
+        fog_id = d if mobile_id == s else s
+        link[f"TAIL_TRANS_{mobile_id}-{fog_id}"] = wifi_tail_wh
+        link[f"TAIL_RECV_{mobile_id}-{fog_id}"] = 0.0
+        link[f"TAIL_TRANS_{fog_id}-{mobile_id}"] = 0.0
+        link[f"TAIL_RECV_{fog_id}-{mobile_id}"] = wifi_tail_wh
+        return
+
+    if {"ecg-device", "city-fog-device"} == models or {"ecg-device", "fog-device"} == models:
+        sensor_id = s if model_s == "ecg-device" else d
+        fog_id = d if sensor_id == s else s
+        link[f"TAIL_TRANS_{sensor_id}-{fog_id}"] = sensor_wifi_tail_wh
+        link[f"TAIL_RECV_{sensor_id}-{fog_id}"] = 0.0
+        link[f"TAIL_TRANS_{fog_id}-{sensor_id}"] = 0.0
+        link[f"TAIL_RECV_{fog_id}-{sensor_id}"] = 0.0
+        return
+
+    if {"smartwatch-device", "city-fog-device"} == models or {"smartwatch-device", "fog-device"} == models:
+        sw_id = s if model_s == "smartwatch-device" else d
+        fog_id = d if sw_id == s else s
+        link[f"TAIL_TRANS_{sw_id}-{fog_id}"] = sensor_wifi_tail_wh
+        link[f"TAIL_RECV_{sw_id}-{fog_id}"] = 0.0
+        link[f"TAIL_TRANS_{fog_id}-{sw_id}"] = 0.0
+        link[f"TAIL_RECV_{fog_id}-{sw_id}"] = 0.0
+        return
+
+    if (model_s == "mobile-device" and model_d in {"ecg-device", "smartwatch-device"}) or (
+        model_d == "mobile-device" and model_s in {"ecg-device", "smartwatch-device"}
+    ):
+        mobile_id = s if model_s == "mobile-device" else d
+        iot_id = d if mobile_id == s else s
+        link[f"TAIL_TRANS_{iot_id}-{mobile_id}"] = ble_tail_wh
+        link[f"TAIL_RECV_{iot_id}-{mobile_id}"] = ble_tail_wh
+        link[f"TAIL_TRANS_{mobile_id}-{iot_id}"] = ble_tail_wh
+        link[f"TAIL_RECV_{mobile_id}-{iot_id}"] = ble_tail_wh
 
 
 class MobilityDistanceMonitor:
@@ -483,6 +458,30 @@ class MobilityDistanceMonitor:
         self.header_written = False
         self.app_name = APP_NAME
         self.mobile_node_id = 2
+        self.link_registry = LinkUpdateRegistry()
+        self.link_registry_initialized = False
+
+    def _init_link_registry(self, sim) -> None:
+        if self.link_registry_initialized:
+            return
+        for u, v in sim.topology.get_edges():
+            models = {_node_model(sim, u), _node_model(sim, v)}
+            types = {_node_type(sim, u), _node_type(sim, v)}
+            if "cloud-device" in models or "CLOUD" in types:
+                self.link_registry.register(u, v, _noop_link_update)
+            elif {"mobile-device", "city-fog-device"} == models:
+                self.link_registry.register(u, v, _update_mobile_fog_link)
+            elif {"ecg-device", "city-fog-device"} == models:
+                self.link_registry.register(u, v, _update_sensor_fog_link)
+            elif {"smartwatch-device", "city-fog-device"} == models:
+                self.link_registry.register(u, v, _update_sensor_fog_link)
+            elif {"mobile-device", "ecg-device"} == models:
+                self.link_registry.register(u, v, _noop_link_update)
+            elif {"mobile-device", "smartwatch-device"} == models:
+                self.link_registry.register(u, v, _noop_link_update)
+            else:
+                self.link_registry.register(u, v, _noop_link_update)
+        self.link_registry_initialized = True
 
     def _current_fog_topology_id(self, sim) -> Optional[int]:
         fog_des = sim.alloc_module.get(self.app_name, {}).get("Fog", [])
@@ -514,6 +513,7 @@ class MobilityDistanceMonitor:
         return "EDGE"
 
     def run(self, sim):
+        self._init_link_registry(sim)
         step = int(sim.env.now)
         user_lat, user_lon = self.mobility_model.user_position(step)
         distances = self.mobility_model.distances_for_step(step)
@@ -523,8 +523,8 @@ class MobilityDistanceMonitor:
         distances_sorted = sorted(distances, key=lambda item: item[1])
         nearest_topo_id = distances_sorted[0][0].topo_id
 
-        if PRINT_NEAREST_DISTANCES:
-            nearest_n = distances_sorted[:max(1, NEAREST_NODES_TO_PRINT)]
+        if cfg.PRINT_NEAREST_DISTANCES:
+            nearest_n = distances_sorted[:max(1, cfg.NEAREST_NODES_TO_PRINT)]
             nearest_info = ", ".join(
                 f"{fog.topo_id}:{dist_m:.2f}m" for fog, dist_m in nearest_n
             )
@@ -536,17 +536,11 @@ class MobilityDistanceMonitor:
         task_processing_topology_id = self._current_task_processing_topology_id(sim)
         sensor_ble_total_wh_per_mb, sensor_ble_data_wh_per_mb, sensor_ble_tail_wh = sensor_ble_energy_wh_per_mb()
 
+        wireless_by_fog = {}
         for fog, distance_m in distances:
             rssi_dbm = rssi_from_distance_dbm(distance_m)
             wifi_bw_mb_s = wifi_throughput_mbps_from_rssi(rssi_dbm)
             tcp_retx_rate = tcp_retransmission_rate_from_rssi(rssi_dbm)
-            tcp_expected_retries = expected_tcp_retries_per_packet(tcp_retx_rate)
-
-            # TODO: delete and rewrite this part significantly - retransmission rate should
-            #       be added in core to affect the actual message delivery time and energy, not just estimated here in the monitor.
-            # Approximation: each retransmission adds one RTT.
-            tcp_expected_extra_latency_tu = tcp_expected_retries * seconds_to_tu(WIFI_RETRANSMISSION_RTT_S)
-            tcp_expected_extra_latency_s = tu_to_seconds(tcp_expected_extra_latency_tu)
 
             udp_effective_bw_mb_s = wifi_bw_mb_s
             tcp_effective_bw_mb_s = wifi_bw_mb_s * (1.0 - tcp_retx_rate)
@@ -554,24 +548,30 @@ class MobilityDistanceMonitor:
             tx_power_w, rx_power_w = galaxy_s4_wifi_powers_w_from_rssi(rssi_dbm)
             tail_energy_wh = tail_energy_wh_per_transfer()
 
-            # TODO: Review the energy_wh_per_mb() usage, since it's wrong to take avarage from TX and RX powers
-            #       and then apply the resulted value to calculate energy for both sides.
-            #       Insted we should calculate TX and RX energies separately and add them to different components of the final energy model.
-            udp_energy_wh_per_mb = energy_wh_per_mb(
+            udp_tx_energy_wh_per_mb, udp_rx_energy_wh_per_mb = transfer_energy_components_wh_per_mb(
                 throughput_mb_s=udp_effective_bw_mb_s,
                 tx_power_w=tx_power_w,
                 rx_power_w=rx_power_w,
-            ) + tail_energy_wh
-            tcp_energy_wh_per_mb = energy_wh_per_mb(
+            )
+            tcp_tx_energy_wh_per_mb, tcp_rx_energy_wh_per_mb = transfer_energy_components_wh_per_mb(
                 throughput_mb_s=max(tcp_effective_bw_mb_s, 1e-12),
                 tx_power_w=tx_power_w,
                 rx_power_w=rx_power_w,
-            ) + tail_energy_wh
+            )
 
             sensor_wifi_total_wh_per_mb, sensor_wifi_data_wh_per_mb, sensor_wifi_promotion_wh, sensor_wifi_tail_wh, sensor_wifi_tx_w, sensor_wifi_rx_w, sensor_wifi_available = sensor_wifi_energy_wh_per_mb(
                 rssi_dbm=rssi_dbm,
                 throughput_mb_s=wifi_bw_mb_s,
             )
+            wireless_by_fog[fog.topo_id] = {
+                "wifi_bw_mb_s": wifi_bw_mb_s,
+                "tcp_retx_rate": tcp_retx_rate,
+                "mobile_tx_w": tx_power_w,
+                "mobile_rx_w": rx_power_w,
+                "sensor_tx_w": sensor_wifi_tx_w,
+                "sensor_rx_w": sensor_wifi_rx_w,
+                "sensor_wifi_available": sensor_wifi_available,
+            }
 
             # Active sensor link depends on current execution mode.
             if execution_mode == "FOG" and sensor_wifi_available:
@@ -581,52 +581,56 @@ class MobilityDistanceMonitor:
                 sensor_active_link = "BLE"
                 sensor_active_energy_wh_per_mb = sensor_ble_total_wh_per_mb
 
-            # Dynamically update Mobile -> Fog link BW from RSSI model.
-            if sim.topology.G.has_edge(2, fog.topo_id):
-                sim.topology.G[2][fog.topo_id]["BW"] = wifi_bw_mb_s
-
             self.buffer.append(
                 {
                     "sim_time_s": step,
-                    "user_latitude": user_lat,
-                    "user_longitude": user_lon,
-                    "fog_dataset_id": fog.dataset_id,
-                    "fog_topology_id": fog.topo_id,
-                    "fog_latitude": fog.latitude,
-                    "fog_longitude": fog.longitude,
-                    "distance_m": distance_m,
-                    "rssi_dbm": rssi_dbm,
-                    "wifi_bw_mb_s": wifi_bw_mb_s,
-                    "udp_effective_bw_mb_s": udp_effective_bw_mb_s,
-                    "tcp_retransmission_rate": tcp_retx_rate,
-                    "tcp_expected_retries": tcp_expected_retries,
-                    "tcp_expected_extra_latency_tu": tcp_expected_extra_latency_tu,
-                    "tcp_expected_extra_latency_s": tcp_expected_extra_latency_s,
-                    "tcp_effective_bw_mb_s": tcp_effective_bw_mb_s,
-                    "wifi_tx_power_w": tx_power_w,
-                    "wifi_rx_power_w": rx_power_w,
-                    "wifi_tail_energy_wh_per_transfer": tail_energy_wh,
-                    "udp_energy_wh_per_mb": udp_energy_wh_per_mb,
-                    "tcp_energy_wh_per_mb": tcp_energy_wh_per_mb,
                     "execution_mode": execution_mode,
-                    "sensor_active_link": sensor_active_link,
-                    "sensor_active_energy_wh_per_mb": sensor_active_energy_wh_per_mb,
-                    "sensor_wifi_available": int(sensor_wifi_available),
-                    "sensor_wifi_tx_power_w": sensor_wifi_tx_w,
-                    "sensor_wifi_rx_power_w": sensor_wifi_rx_w,
-                    "sensor_wifi_energy_wh_per_mb": sensor_wifi_total_wh_per_mb,
-                    "sensor_wifi_data_energy_wh_per_mb": sensor_wifi_data_wh_per_mb,
-                    "sensor_wifi_promotion_energy_wh_per_transfer": sensor_wifi_promotion_wh,
-                    "sensor_wifi_tail_energy_wh_per_transfer": sensor_wifi_tail_wh,
-                    "sensor_ble_energy_wh_per_mb": sensor_ble_total_wh_per_mb,
-                    "sensor_ble_data_energy_wh_per_mb": sensor_ble_data_wh_per_mb,
-                    "sensor_ble_tail_energy_wh_per_transfer": sensor_ble_tail_wh,
-                    "current_fog_topology_id": current_fog_topology_id,
-                    "current_mobile_topology_id": current_mobile_topology_id,
                     "task_processing_topology_id": task_processing_topology_id,
-                    "is_nearest": int(fog.topo_id == nearest_topo_id),
+                    # Optional debug fields (disabled):
+                    # "user_latitude": user_lat,
+                    # "user_longitude": user_lon,
+                    # "fog_dataset_id": fog.dataset_id,
+                    # "fog_topology_id": fog.topo_id,
+                    # "fog_latitude": fog.latitude,
+                    # "fog_longitude": fog.longitude,
+                    # "distance_m": distance_m,
+                    # "rssi_dbm": rssi_dbm,
+                    # "wifi_bw_mb_s": wifi_bw_mb_s,
+                    # "udp_effective_bw_mb_s": udp_effective_bw_mb_s,
+                    # "tcp_retransmission_rate": tcp_retx_rate,
+                    # "tcp_effective_bw_mb_s": tcp_effective_bw_mb_s,
+                    # "wifi_tx_power_w": tx_power_w,
+                    # "wifi_rx_power_w": rx_power_w,
+                    # "wifi_tail_energy_wh_per_transfer": tail_energy_wh,
+                    # "udp_tx_energy_wh_per_mb": udp_tx_energy_wh_per_mb,
+                    # "udp_rx_energy_wh_per_mb": udp_rx_energy_wh_per_mb,
+                    # "tcp_tx_energy_wh_per_mb": tcp_tx_energy_wh_per_mb,
+                    # "tcp_rx_energy_wh_per_mb": tcp_rx_energy_wh_per_mb,
+                    # "sensor_active_link": sensor_active_link,
+                    # "sensor_active_energy_wh_per_mb": sensor_active_energy_wh_per_mb,
+                    # "sensor_wifi_available": int(sensor_wifi_available),
+                    # "sensor_wifi_tx_power_w": sensor_wifi_tx_w,
+                    # "sensor_wifi_rx_power_w": sensor_wifi_rx_w,
+                    # "sensor_wifi_energy_wh_per_mb": sensor_wifi_total_wh_per_mb,
+                    # "sensor_wifi_data_energy_wh_per_mb": sensor_wifi_data_wh_per_mb,
+                    # "sensor_wifi_promotion_energy_wh_per_transfer": sensor_wifi_promotion_wh,
+                    # "sensor_wifi_tail_energy_wh_per_transfer": sensor_wifi_tail_wh,
+                    # "sensor_ble_energy_wh_per_mb": sensor_ble_total_wh_per_mb,
+                    # "sensor_ble_data_energy_wh_per_mb": sensor_ble_data_wh_per_mb,
+                    # "sensor_ble_tail_energy_wh_per_transfer": sensor_ble_tail_wh,
+                    # "current_fog_topology_id": current_fog_topology_id,
+                    # "current_mobile_topology_id": current_mobile_topology_id,
+                    # "is_nearest": int(fog.topo_id == nearest_topo_id),
                 }
             )
+
+        self.link_registry.update_all(
+            sim,
+            {
+                "step": step,
+                "wireless_by_fog": wireless_by_fog,
+            },
+        )
 
         if (step % self.flush_every_steps) == 0:
             self.flush()
@@ -641,205 +645,74 @@ class MobilityDistanceMonitor:
         self.buffer.clear()
 
 
-class OffloadingDecisionMonitor:
+class StaticLinkMonitor:
     """
-    Solves LP offloading decision periodically and updates CURRENT_EXECUTION_MODE.
-    Logs decision metrics and post-factum migration energy.
+    Updates static-scenario wireless links from a fixed RSSI profile.
     """
-    def __init__(self, mobility_model: MobilityModel, output_path: Path):
-        self.mobility_model = mobility_model
-        self.output_path = output_path
-        self.buffer = []
-        self.header_written = False
-        self.last_mode = str(CURRENT_EXECUTION_MODE).upper()
+    def __init__(self, fixed_rssi_dbm: float):
+        self.fixed_rssi_dbm = float(fixed_rssi_dbm)
+        self.link_registry = LinkUpdateRegistry()
+        self.link_registry_initialized = False
+
+    def _init_link_registry(self, sim) -> None:
+        if self.link_registry_initialized:
+            return
+        for u, v in sim.topology.get_edges():
+            models = {_node_model(sim, u), _node_model(sim, v)}
+            types = {_node_type(sim, u), _node_type(sim, v)}
+            if "cloud-device" in models or "CLOUD" in types:
+                self.link_registry.register(u, v, _noop_link_update)
+            elif {"mobile-device", "city-fog-device"} == models or {"mobile-device", "fog-device"} == models:
+                self.link_registry.register(u, v, _update_mobile_fog_link)
+            elif {"ecg-device", "city-fog-device"} == models or {"ecg-device", "fog-device"} == models:
+                self.link_registry.register(u, v, _update_sensor_fog_link)
+            elif {"smartwatch-device", "city-fog-device"} == models or {"smartwatch-device", "fog-device"} == models:
+                self.link_registry.register(u, v, _update_sensor_fog_link)
+            else:
+                self.link_registry.register(u, v, _noop_link_update)
+        self.link_registry_initialized = True
 
     def run(self, sim):
-        global CURRENT_EXECUTION_MODE
+        self._init_link_registry(sim)
+        rssi_dbm = self.fixed_rssi_dbm
+        wifi_bw_mb_s = wifi_throughput_mbps_from_rssi(rssi_dbm)
+        tcp_retx_rate = tcp_retransmission_rate_from_rssi(rssi_dbm)
+        mobile_tx_w, mobile_rx_w = galaxy_s4_wifi_powers_w_from_rssi(rssi_dbm)
+        sensor_tx_w, sensor_rx_w, sensor_wifi_available = sensor_wifi_data_powers_w_from_rssi(rssi_dbm)
 
-        step = int(sim.env.now)
-        distances = self.mobility_model.distances_for_step(step)
-        if not distances:
-            return
+        fog_ids = [
+            node_id
+            for node_id in sim.topology.G.nodes()
+            if _node_model(sim, node_id) in {"city-fog-device", "fog-device"}
+        ]
+        wireless_state = {
+            "wifi_bw_mb_s": wifi_bw_mb_s,
+            "tcp_retx_rate": tcp_retx_rate,
+            "mobile_tx_w": mobile_tx_w,
+            "mobile_rx_w": mobile_rx_w,
+            "sensor_tx_w": sensor_tx_w,
+            "sensor_rx_w": sensor_rx_w,
+            "sensor_wifi_available": sensor_wifi_available,
+        }
+        wireless_by_fog = {fog_id: wireless_state for fog_id in fog_ids}
 
-        nearest_fog, nearest_distance_m = min(distances, key=lambda item: item[1])
-        fog_des = sim.alloc_module.get(APP_NAME, {}).get("Fog", [])
-        current_fog_topology_id = sim.alloc_DES.get(fog_des[0], None) if fog_des else None
-        mobile_des = sim.alloc_module.get(APP_NAME, {}).get("Mobile", [])
-        current_mobile_topology_id = sim.alloc_DES.get(mobile_des[0], None) if mobile_des else None
-        rssi_fog_dbm = rssi_from_distance_dbm(nearest_distance_m)
-        wifi_bw_mb_s = wifi_throughput_mbps_from_rssi(rssi_fog_dbm)
-        tcp_retx_rate = tcp_retransmission_rate_from_rssi(rssi_fog_dbm)
-        attempts_factor = 1.0 / max(1.0 - tcp_retx_rate, 1e-12)
-
-        task_input_mb = kb_to_mb(TASK1_DATA_SIZE_KB)
-        task_result_mb = 740.0 / (1024.0 * 1024.0)
-        migration_mb = kb_to_mb(TASK1_MIGRATION_STATE_SIZE_KB)
-
-        # Link delays (TCP expected).
-        ble_bw_mb_s = ips_to_ipt(SENSOR_BLE_DATA_BW_MBPS)
-        delay_sensor_edge = task_input_mb / max(ble_bw_mb_s, 1e-12)
-        delay_edge_fog = task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
-        delay_sensor_fog = task_input_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
-
-        mobile_ipt = ips_to_ipt(1.9 * 10**9)
-        fog_ipt = ips_to_ipt(500 * 10**6)
-        proc_instructions = mi_to_instructions(TASK1_COMPLEXITY_MI)
-        proc_delay_edge = proc_instructions / max(mobile_ipt, 1e-12)
-        proc_delay_fog = proc_instructions / max(fog_ipt, 1e-12)
-
-        # L objective term.
-        latency_edge = delay_sensor_edge + proc_delay_edge + delay_edge_fog
-        latency_fog = delay_sensor_fog + proc_delay_fog
-
-        # E objective term.
-        # EDGE mode:
-        # sensor tx(BLE) + edge rx(BLE) + edge processing + edge tx->fog(WiFi).
-        ble_transfer_tu = task_input_mb / max(ble_bw_mb_s, 1e-12)
-        _, sensor_ble_data_wh_per_mb, sensor_ble_tail_wh = sensor_ble_energy_wh_per_mb()
-        sensor_ble_tx_wh = sensor_ble_data_wh_per_mb * task_input_mb + sensor_ble_tail_wh
-        # Phone BLE receive energy includes data RX + BLE tail overhead.
-        edge_ble_rx_wh = watt_to_wpt(SENSOR_BLE_RX_POWER_W) * ble_transfer_tu
-        edge_ble_rx_wh += fixed_overhead_energy_wh(SENSOR_BLE_TAIL_POWER_W, SENSOR_BLE_TAIL_TIME_S)
-        edge_proc_wh = watt_to_wpt(1.3) * proc_delay_edge
-        edge_wifi_tx_w, edge_wifi_rx_w = galaxy_s4_wifi_powers_w_from_rssi(rssi_fog_dbm)
-        edge_tx_to_fog_wh = watt_to_wpt(edge_wifi_tx_w) * (task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
-        edge_tx_to_fog_wh += tail_energy_wh_per_transfer()
-        energy_edge = sensor_ble_tx_wh + edge_ble_rx_wh + edge_proc_wh + edge_tx_to_fog_wh
-
-        # FOG mode:
-        # sensor tx->fog (WiFi) + edge rx from fog (result, WiFi). Fog energy excluded.
-        sensor_wifi_tx_w, _, sensor_wifi_available = sensor_wifi_data_powers_w_from_rssi(rssi_fog_dbm)
-        if sensor_wifi_available:
-            sensor_tx_to_fog_wh = watt_to_wpt(sensor_wifi_tx_w) * (task_input_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
-            sensor_tx_to_fog_wh += fixed_overhead_energy_wh(SENSOR_WIFI_PROMOTION_POWER_W, SENSOR_WIFI_PROMOTION_TIME_S)
-            sensor_tx_to_fog_wh += fixed_overhead_energy_wh(SENSOR_WIFI_TAIL_POWER_W, SENSOR_WIFI_TAIL_TIME_S)
-        else:
-            # Keep physical energy values clean for reporting/plots.
-            sensor_tx_to_fog_wh = 0.0
-
-        edge_rx_from_fog_wh = watt_to_wpt(edge_wifi_rx_w) * (task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
-        edge_rx_from_fog_wh += tail_energy_wh_per_transfer()
-        energy_fog = sensor_tx_to_fog_wh + edge_rx_from_fog_wh
-
-        c_edge = ALPHA_LATENCY * latency_edge + BETA_ENERGY * energy_edge
-        c_fog = ALPHA_LATENCY * latency_fog + BETA_ENERGY * energy_fog
-        # Hard feasibility constraint: if sensor->fog WiFi is unavailable, FOG mode is forbidden.
-        if not sensor_wifi_available:
-            chosen_mode = "EDGE"
-        else:
-            chosen_mode = solve_lp_two_mode(c_edge, c_fog)
-
-        migration_edge_energy_wh = 0.0
-        migration_fog_energy_wh = 0.0
-        # Migration happens only when offloading starts: EDGE -> FOG.
-        # Returning execution to EDGE does not migrate the task binary/state back.
-        if chosen_mode != self.last_mode and chosen_mode == "FOG":
-            migration_time_tu = migration_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
-            # Edge side: TX + tail.
-            migration_edge_energy_wh = watt_to_wpt(edge_wifi_tx_w) * migration_time_tu
-            migration_edge_energy_wh += tail_energy_wh_per_transfer()
-            # Fog side: RX only (separate accounting for YAFS statistics aggregation).
-            # city-fog WiFi RX model is 3.7W (Achilles and the Tortoise, 802.11g/n).
-            migration_fog_energy_wh = watt_to_wpt(3.7) * migration_time_tu
-        migration_energy_wh = migration_edge_energy_wh + migration_fog_energy_wh
-
-        # log real values
-        real_energy_edge = 0.0
-        real_energy_sensors = 0.0
-        if self.last_mode == "EDGE":
-            real_energy_edge += edge_ble_rx_wh + edge_proc_wh + edge_tx_to_fog_wh
-            real_energy_sensors += sensor_ble_tx_wh
-
-            # added migration energy to edge postfactum
-            real_energy_edge += migration_edge_energy_wh
-        else:   # FOG
-            real_energy_edge +=  edge_rx_from_fog_wh
-            real_energy_sensors += sensor_tx_to_fog_wh
-
-        CURRENT_EXECUTION_MODE = chosen_mode
-        self.last_mode = chosen_mode
-
-        self.buffer.append(
+        self.link_registry.update_all(
+            sim,
             {
-                "sim_time_s": step,
-                "nearest_fog_topology_id": nearest_fog.topo_id,
-                "current_fog_topology_id": current_fog_topology_id,
-                "current_mobile_topology_id": current_mobile_topology_id,
-                "nearest_fog_distance_m": nearest_distance_m,
-                "nearest_fog_rssi_dbm": rssi_fog_dbm,
-                "wifi_bw_mb_s": wifi_bw_mb_s,
-                "tcp_retransmission_rate": tcp_retx_rate,
-                "latency_edge_tu": latency_edge,
-                "latency_fog_tu": latency_fog,
-                "energy_edge_wh": energy_edge,
-                "energy_fog_wh": energy_fog,
-                "objective_edge": c_edge,
-                "objective_fog": c_fog,
-                "chosen_mode": chosen_mode,
-                "migration_edge_energy_wh": migration_edge_energy_wh,
-                "migration_fog_energy_wh": migration_fog_energy_wh,
-                "migration_energy_wh": migration_energy_wh,
-                "real_energy_edge_wh": real_energy_edge,
-                "real_energy_sensors_wh": real_energy_sensors,
-            }
+                "step": int(sim.env.now),
+                "wireless_by_fog": wireless_by_fog,
+            },
         )
 
-        self.flush()
 
-    def flush(self):
-        if not self.buffer:
-            return
-        df = pd.DataFrame(self.buffer)
-        mode = "a" if self.header_written else "w"
-        df.to_csv(self.output_path, mode=mode, header=(not self.header_written), index=False)
-        self.header_written = True
-        self.buffer.clear()
-
-
-def load_city_fog_devices(dataset_dir: Path, topo_start_id: int = 1000) -> List[CityFogDevice]:
-    df = pd.read_csv(dataset_dir / "edgeResources-melbCBD.csv")
-    # Keep city resources (exclude central datacenter level).
-    fog_df = df[df["Level"] > 0].copy()
-    fog_devices: List[CityFogDevice] = []
-    for idx, row in fog_df.reset_index(drop=True).iterrows():
-        fog_devices.append(
-            CityFogDevice(
-                dataset_id=int(row["ID"]),
-                topo_id=topo_start_id + idx,
-                latitude=float(row["Latitude"]),
-                longitude=float(row["Longitude"]),
-                details=str(row["Details"]),
-            )
-        )
-    return fog_devices
-
-
-def load_user_trace(dataset_dir: Path) -> List[Tuple[float, float]]:
-    df = pd.read_csv(dataset_dir / "usersLocation-melbCBD_1.csv")
-    waypoints = list(zip(df["Latitude"].astype(float), df["Longitude"].astype(float)))
-    return interpolate_user_path(waypoints, speed_mps=USER_SPEED_MPS, step_seconds=SIM_STEP_SECONDS)
-        
-def watt_to_wpt(watt: float) -> float:
-    if TIME_UNIT == TimeUnit.SECOND:
-        return watt / 3600.0
-    if TIME_UNIT == TimeUnit.MILLISECOND:
-        return watt / (3600.0 * 1000.0)
-    raise ValueError("Unknown TIME_UNIT")
-        
-def ips_to_ipt(ips: float) -> float:
-    if TIME_UNIT == TimeUnit.SECOND:
-        return ips
-    if TIME_UNIT == TimeUnit.MILLISECOND:
-        return ips * 10 ** -3
-    raise ValueError("Unknown TIME_UNIT")
-
-def create_topology(city_fog_devices: List[CityFogDevice]) -> Topology:
+def create_topology_dynamic(city_fog_devices: List[CityFogDevice]) -> Topology:
     """
     TOPOLOGY
     """
     topology_json = {}
     topology_json["entity"] = []
     topology_json["link"] = []
+    model_by_id = {}
 
     # "COST" only used to calculate get_cost_cloud() which is currently commmented
     # IPT - Instructions Per Time Unit, where Time Unit is what is 1 in simulation
@@ -874,34 +747,43 @@ def create_topology(city_fog_devices: List[CityFogDevice]) -> Topology:
     ##.  https://dl.acm.org/doi/10.1145/2973750.2985259
     # Static topology endpoints: cloud/mobile/ecg-sensor.
     # Dynamic fog offloading is done to city fog devices only.
-    cloud_dev    = {"id": 0, "model": node_model_name("cloud-device"), "type": "CLOUD", "IPT": 5000 * 10**6, "RAM": 40000, "WATT": 0.0}
-    mobile_dev = {"id": 2, "model": node_model_name("mobile-device"), "type": "EDGE",
+    cloud_dev    = {"id": 0, "model": "cloud-device", "type": "CLOUD", "IPT": 5000 * 10**6, "RAM": 40000, "WATT": 0.0}
+    mobile_dev = {"id": 2, "model": "mobile-device", "type": "EDGE",
                   "IPT": ips_to_ipt(1.9 * 10**9),
                   "RAM": 2000,
                   "WATT": watt_to_wpt(1.3)}
-    ecg_dev = {"id": 4, "model": node_model_name("ecg-device"), "type": "IOT",
+    smartwatch_dev = {"id": 3, "model": "smartwatch-device", "type": "IOT",
+                      "IPT": ips_to_ipt(768 * 10**6),
+                      "RAM": 256,
+                      "WATT": watt_to_wpt(0.361)}
+    ecg_dev = {"id": 4, "model": "ecg-device", "type": "IOT",
                "IPT": ips_to_ipt(768 * 10**6),
                "RAM": 256,
                "WATT": watt_to_wpt(0.361)}
 
     topology_json["entity"].append(cloud_dev)
     topology_json["entity"].append(mobile_dev)
+    topology_json["entity"].append(smartwatch_dev)
     topology_json["entity"].append(ecg_dev)
+    model_by_id[cloud_dev["id"]] = cloud_dev["model"]
+    model_by_id[mobile_dev["id"]] = mobile_dev["model"]
+    model_by_id[smartwatch_dev["id"]] = smartwatch_dev["model"]
+    model_by_id[ecg_dev["id"]] = ecg_dev["model"]
 
     for fog in city_fog_devices:
-        topology_json["entity"].append(
-            {
-                "id": fog.topo_id,
-                "model": node_model_name("city-fog-device"),
-                "type": "FOG",
-                "IPT": ips_to_ipt(500 * 10**6),
-                "RAM": 256,
-                "WATT": watt_to_wpt(0.9),
-                "LATITUDE": fog.latitude,
-                "LONGITUDE": fog.longitude,
-                "DETAILS": fog.details,
-            }
-        )
+        fog_entity = {
+            "id": fog.topo_id,
+            "model": "city-fog-device",
+            "type": "FOG",
+            "IPT": ips_to_ipt(500 * 10**6),
+            "RAM": 256,
+            "WATT": watt_to_wpt(0.9),
+            "LATITUDE": fog.latitude,
+            "LONGITUDE": fog.longitude,
+            "DETAILS": fog.details,
+        }
+        topology_json["entity"].append(fog_entity)
+        model_by_id[fog_entity["id"]] = fog_entity["model"]
     
     # BLE 4.0/4.1 Modulation Rate: 1 Mb/s, Max Throughput: 0.305 Mb/s
     ##  Data Transmission Efficiency in Bluetooth Low Energy Versions
@@ -916,60 +798,154 @@ def create_topology(city_fog_devices: List[CityFogDevice]) -> Topology:
         #     topology_json["link"].append(link)
 
     # ECG sensor -> Mobile (BLE).
-    topology_json["link"].append(
-        {
-            "PR": 0,
-            "s": 4,
-            "BW": ips_to_ipt(0.305),
-            "d": 2,
-            "WATT_TRANS": watt_to_wpt(0.1807),
-            "WATT_RECV": watt_to_wpt(0.1749),
-        }
-    )
+    ble_link = {
+        "PR": 0,
+        "s": 4,
+        "BW": ips_to_ipt(0.305),
+        "d": 2,
+        "RTR": 0.0,
+        "WATT_TRANS": watt_to_wpt(0.1807),
+        "WATT_RECV": watt_to_wpt(0.1749),
+    }
+    assign_tail_fields_by_models(ble_link, model_by_id)
+    topology_json["link"].append(ble_link)
+
+    # SmartWatch -> Mobile (BLE).
+    sw_ble_link = {
+        "PR": 0,
+        "s": 3,
+        "BW": ips_to_ipt(0.305),
+        "d": 2,
+        "RTR": 0.0,
+        "WATT_TRANS": watt_to_wpt(0.1807),
+        "WATT_RECV": watt_to_wpt(0.1749),
+    }
+    assign_tail_fields_by_models(sw_ble_link, model_by_id)
+    topology_json["link"].append(sw_ble_link)
 
     # Mobile -> each city fog (wireless uplink).
     for fog in city_fog_devices:
-        topology_json["link"].append(
-            {
-                "PR": 0,
-                "s": 2,
-                "BW": ips_to_ipt(12.5),
-                "d": fog.topo_id,
-                "WATT_TRANS": watt_to_wpt(0.654),
-                "WATT_RECV": watt_to_wpt(3.7),
-            }
-        )
+        mobile_fog_link = {
+            "PR": 0,
+            "s": 2,
+            "BW": ips_to_ipt(12.5),
+            "d": fog.topo_id,
+            "RTR": 0.0,
+            "WATT_TRANS": watt_to_wpt(0.654),
+            "WATT_RECV": watt_to_wpt(3.7),
+        }
+        assign_tail_fields_by_models(mobile_fog_link, model_by_id)
+        topology_json["link"].append(mobile_fog_link)
 
     # ECG sensor -> each city fog (WiFi uplink, used in FOG execution mode).
     for fog in city_fog_devices:
-        topology_json["link"].append(
-            {
-                "PR": 0,
-                "s": 4,
-                "BW": ips_to_ipt(12.5),
-                "d": fog.topo_id,
-                "WATT_TRANS": watt_to_wpt(0.6728),
-                "WATT_RECV": watt_to_wpt(3.7),
-            }
-        )
+        sensor_fog_link = {
+            "PR": 0,
+            "s": 4,
+            "BW": ips_to_ipt(12.5),
+            "d": fog.topo_id,
+            "RTR": 0.0,
+            "WATT_TRANS": watt_to_wpt(0.6728),
+            "WATT_RECV": watt_to_wpt(3.7),
+        }
+        assign_tail_fields_by_models(sensor_fog_link, model_by_id)
+        topology_json["link"].append(sensor_fog_link)
+
+    # SmartWatch -> each city fog (WiFi uplink, used in FOG execution mode).
+    for fog in city_fog_devices:
+        sw_fog_link = {
+            "PR": 0,
+            "s": 3,
+            "BW": ips_to_ipt(12.5),
+            "d": fog.topo_id,
+            "RTR": 0.0,
+            "WATT_TRANS": watt_to_wpt(0.7399),
+            "WATT_RECV": watt_to_wpt(3.7),
+        }
+        assign_tail_fields_by_models(sw_fog_link, model_by_id)
+        topology_json["link"].append(sw_fog_link)
 
     # Every city fog device -> cloud.
     for fog in city_fog_devices:
-        topology_json["link"].append(
-            {
-                "PR": 0,
-                "s": fog.topo_id,
-                "BW": ips_to_ipt(12.5),
-                "d": 0,
-                "WATT_TRANS": watt_to_wpt(4.9),
-                "WATT_RECV": watt_to_wpt(3.7),
-            }
-        )
+        fog_cloud_link = {
+            "PR": 0,
+            "s": fog.topo_id,
+            "BW": ips_to_ipt(12.5),
+            "d": 0,
+            "RTR": 0.0,
+            "WATT_TRANS": watt_to_wpt(4.9),
+            "WATT_RECV": watt_to_wpt(3.7),
+        }
+        assign_tail_fields_by_models(fog_cloud_link, model_by_id)
+        topology_json["link"].append(fog_cloud_link)
 
     t = Topology()
     t.load(topology_json)
     validate_topology_constraints(t)
 
+    return t
+
+
+def create_topology_static() -> Topology:
+    topology_json = {"entity": [], "link": []}
+
+    cloud_dev = {
+        "id": 0,
+        "model": "cloud-device",
+        "type": "CLOUD",
+        "IPT": 5000 * 10**6,
+        "RAM": 40000,
+        "WATT": 0.0,
+    }
+    fog_dev = {
+        "id": 1,
+        "model": "fog-device",
+        "type": "FOG",
+        "IPT": ips_to_ipt(500 * 10**6),
+        "RAM": 256,
+        "WATT": watt_to_wpt(0.9),
+    }
+    mobile_dev = {
+        "id": 2,
+        "model": "mobile-device",
+        "type": "EDGE",
+        "IPT": ips_to_ipt(1.9 * 10**9),
+        "RAM": 2000,
+        "WATT": watt_to_wpt(1.3),
+    }
+    smartwatch_dev = {
+        "id": 3,
+        "model": "smartwatch-device",
+        "type": "IOT",
+        "IPT": ips_to_ipt(768 * 10**6),
+        "RAM": 256,
+        "WATT": watt_to_wpt(0.361),
+    }
+    ecg_dev = {
+        "id": 4,
+        "model": "ecg-device",
+        "type": "IOT",
+        "IPT": ips_to_ipt(768 * 10**6),
+        "RAM": 256,
+        "WATT": watt_to_wpt(0.361),
+    }
+
+    topology_json["entity"].extend([cloud_dev, smartwatch_dev, mobile_dev, fog_dev, ecg_dev])
+    model_by_id = {int(e["id"]): str(e["model"]) for e in topology_json["entity"]}
+
+    with open(Path(__file__).parent / APP_NAME / "networkDefinition.json", "r") as f:
+        data = json.load(f)
+    for link in data["link"]:
+        link["WATT_TRANS"] = watt_to_wpt(link["WATT_TRANS"])
+        link["WATT_RECV"] = watt_to_wpt(link["WATT_RECV"])
+        link["BW"] = ips_to_ipt(link["BW"])
+        link["RTR"] = float(link.get("RTR", 0.0))
+        assign_tail_fields_by_models(link, model_by_id)
+        topology_json["link"].append(link)
+
+    t = Topology()
+    t.load(topology_json)
+    validate_topology_constraints(t)
     return t
 
 
@@ -992,25 +968,30 @@ def create_application():
     # APPLICATION
     a = Application(name=APP_NAME)
 
-    a.set_modules([
+    modules = [
         {"Cloud": {"Type": Application.TYPE_SINK}},
         {"Fog": {"RAM": 1024, "Type": Application.TYPE_MODULE}},
         {"Mobile": {"RAM": 1024, "Type": Application.TYPE_MODULE}},
+        {"SmartWatch": {"Type": Application.TYPE_MODULE}},
         {"EcgSensor": {"Type": Application.TYPE_MODULE}},
+        {"Virtual-SW-Gen": {"Type": Application.TYPE_SOURCE}},
         {"Virtual-ECG-Gen": {"Type": Application.TYPE_SOURCE}},
-    ])
+    ]
+    a.set_modules(modules)
 
     with open(Path(__file__).parent / APP_NAME / "appDefinition.json", "r") as f:
         data = json.load(f)
 
     messages = {}
     for message in data["message"]:
+        transport = str(message.get("transport", infer_message_transport(message["name"]))).upper()
         m = Message(
             message["name"],
             message["s"],
             message["d"],
             instructions=message["instructions"],
             bytes=message["bytes"],
+            transport=transport,
         )
         messages[message["name"]] = m
         if message["s"] == "None":
@@ -1043,189 +1024,21 @@ def create_application():
     return a
 
 
-def generate_mobility_animation(
-    mobility_model: MobilityModel,
-    output_path: Path,
-    placement_history_path: Optional[Path] = None,
-    simulated_until_step: Optional[int] = None,
-    step_stride: int = ANIMATION_STEP_STRIDE,
-):
-    """
-    Creates a lightweight animation for user movement, nearest fog selection,
-    and real task processing placement (EDGE/FOG) if history is provided.
-    """
-    if not mobility_model.user_trace or not mobility_model.fog_devices:
-        return
-
-    effective_stride = max(1, step_stride)
-    n_steps = len(mobility_model.user_trace)
-    fog_lats = np.array([f.latitude for f in mobility_model.fog_devices])
-    fog_lons = np.array([f.longitude for f in mobility_model.fog_devices])
-    fog_by_topo_id = {f.topo_id: f for f in mobility_model.fog_devices}
-
-    placement_by_step: Dict[int, Dict[str, object]] = {}
-    if placement_history_path is not None and placement_history_path.exists():
-        df = pd.read_csv(placement_history_path)
-        for step, g in df.groupby("sim_time_s", as_index=False):
-            row = g.iloc[0]
-            placement_by_step[int(step)] = {
-                "execution_mode": str(row.get("execution_mode", "EDGE")).upper(),
-                "task_processing_topology_id": row.get("task_processing_topology_id", np.nan),
-            }
-        if simulated_until_step is None and not df.empty:
-            simulated_until_step = int(df["sim_time_s"].max())
-
-    if simulated_until_step is not None:
-        n_steps = min(n_steps, max(1, int(simulated_until_step) + 1))
-
-    est_frames = n_steps // effective_stride
-    if est_frames > ANIMATION_MAX_FRAMES:
-        effective_stride = int(np.ceil(float(n_steps) / float(ANIMATION_MAX_FRAMES)))
-    frames = list(range(0, n_steps, effective_stride))
-
-    fig, ax = plt.subplots(figsize=(8, 8))
-    method_tag = OPTIMIZATION_METHOD.upper()
-    ax.scatter(fog_lons, fog_lats, s=10, c="lightgray", label=f"City fog nodes ({method_tag})")
-    path_lons = np.array([p[1] for p in mobility_model.user_trace])
-    path_lats = np.array([p[0] for p in mobility_model.user_trace])
-    ax.plot(path_lons, path_lats, linewidth=1.0, color="#2a9d8f", alpha=0.4, label=f"User path ({method_tag})")
-
-    user_point, = ax.plot([], [], "o", color="#e76f51", markersize=8, label=f"User ({method_tag})")
-    nearest_point, = ax.plot([], [], "o", color="#264653", markersize=8, label="Nearest fog (distance)")
-    active_point, = ax.plot([], [], marker="*", color="#1d3557", markersize=11, linestyle="None", label=f"Active processing node ({method_tag})")
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.legend(loc="upper right")
-
-    def _update(step: int):
-        lat, lon = mobility_model.user_position(step)
-        nearest_topo = mobility_model.nearest_fog_topology_node(step)
-        nearest = next((f for f in mobility_model.fog_devices if f.topo_id == nearest_topo), None)
-        user_point.set_data([lon], [lat])
-        if nearest is not None:
-            nearest_point.set_data([nearest.longitude], [nearest.latitude])
-
-        mode = str(CURRENT_EXECUTION_MODE).upper()
-        placement = placement_by_step.get(step)
-        if placement is not None:
-            mode = str(placement.get("execution_mode", mode)).upper()
-            topo_id = placement.get("task_processing_topology_id", np.nan)
-            if mode == "FOG" and pd.notna(topo_id):
-                fog = fog_by_topo_id.get(int(topo_id))
-                if fog is not None:
-                    active_point.set_data([fog.longitude], [fog.latitude])
-                else:
-                    active_point.set_data([], [])
-            else:
-                # EDGE processing is on the mobile device at user's location.
-                active_point.set_data([lon], [lat])
-        else:
-            if mode == "FOG":
-                active_point.set_data([], [])
-            else:
-                active_point.set_data([lon], [lat])
-
-        ax.set_title(f"{APP_NAME} | {method_tag} | t={step}s | mode={mode}")
-        return user_point, nearest_point, active_point
-
-    ani = FuncAnimation(fig, _update, frames=frames, interval=80, blit=False, repeat=False)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        if ANIMATION_FORMAT.lower() == "gif":
-            ani.save(output_path.with_suffix(".gif"), writer=PillowWriter(fps=8))
-        else:
-            ani.save(output_path.with_suffix(".mp4"), writer=FFMpegWriter(fps=12))
-    except Exception as ex:
-        logging.warning("Animation export failed (%s). Falling back to final snapshot.", ex)
-        lat, lon = mobility_model.user_position(n_steps - 1)
-        ax.plot([lon], [lat], "o", color="#e76f51", markersize=8)
-        ax.set_title("Final user position")
-        fig.savefig(output_path.with_suffix(".png"), dpi=150, bbox_inches="tight")
-    finally:
-        plt.close(fig)
+def build_task_latency_report(stats: Stats) -> pd.DataFrame:
+    latency_by_message = pd.concat(
+        [stats.times("time_latency"), stats.times("time_service"), stats.times("time_total_response")],
+        axis=1,
+    )
+    task_labels = latency_by_message.index.to_series().str.extract(r"^(M\.TASK\d+)")[0].fillna("UNCLASSIFIED")
+    latency_by_task = latency_by_message.groupby(task_labels).sum(numeric_only=True)
+    if not latency_by_task.empty:
+        latency_by_task.loc["mean"] = latency_by_task.mean()
+    return latency_by_task
 
 
-def generate_energy_decision_plot(
-    decision_history_path: Path,
-    output_path: Path,
-):
-    """
-    Plot LP energy terms used for EDGE/FOG decision per simulation step.
-    """
-    if not decision_history_path.exists():
-        logging.warning("Decision history file not found: %s", decision_history_path)
-        return
-
-    df = pd.read_csv(decision_history_path)
-    required_cols = {"sim_time_s", "energy_edge_wh", "energy_fog_wh"}
-    if not required_cols.issubset(set(df.columns)):
-        logging.warning("Decision history missing required columns: %s", required_cols)
-        return
-
-    # "instant"  -> per-step power in mW
-    # "integral" -> cumulative energy in mWh
-    # "both"     -> two subplots (instant + integral)
-    plot_mode = "instant"
-
-    sim_t = df["sim_time_s"].astype(float)
-    dt_s = sim_t.diff().fillna(float(OFFLOADING_DECISION_PERIOD_S))
-    dt_s = dt_s.where(dt_s > 0.0, float(OFFLOADING_DECISION_PERIOD_S))
-    dt_h = dt_s / 3600.0
-
-    edge_wh = df["real_energy_edge_wh"].astype(float)
-    sensors_wh = df["real_energy_sensors_wh"].astype(float)
-    total_wh = edge_wh + sensors_wh
-
-    # Instantaneous power from per-step energy.
-    edge_mw = (edge_wh / dt_h) * 1000.0
-    sensors_mw = (sensors_wh / dt_h) * 1000.0
-    total_mw = (total_wh / dt_h) * 1000.0
-
-    # Integral view (cumulative energy).
-    edge_mwh_cum = edge_wh.cumsum() * 1000.0
-    sensors_mwh_cum = sensors_wh.cumsum() * 1000.0
-    total_mwh_cum = total_wh.cumsum() * 1000.0
-
-    if plot_mode == "both":
-        fig, axes = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
-        ax_inst, ax_int = axes
-    else:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax_inst = ax
-        ax_int = ax
-
-    if plot_mode in ("instant", "both"):
-        ax_inst.plot(sim_t, edge_mw, label="P_edge (mW)", linewidth=1.0, color="#1f77b4")
-        # ax_inst.plot(sim_t, sensors_mw, label="P_sensors (mW)", linewidth=1.0, color="#ff7f0e")
-        # ax_inst.plot(sim_t, total_mw, label="P_total (mW)", linewidth=1.1, color="#2ca02c")
-        ax_inst.set_title(f"{APP_NAME} | {OPTIMIZATION_METHOD.upper()} | Instant Power")
-        ax_inst.set_ylabel("Power (mW)")
-        ax_inst.grid(True, alpha=0.25)
-        ax_inst.legend(loc="upper right")
-
-    if plot_mode in ("integral", "both"):
-        ax_int.plot(sim_t, edge_mwh_cum, label="E_edge cum (mWh)", linewidth=1.0, color="#1f77b4")
-        ax_int.plot(sim_t, sensors_mwh_cum, label="E_sensors cum (mWh)", linewidth=1.0, color="#ff7f0e")
-        ax_int.plot(sim_t, total_mwh_cum, label="E_total cum (mWh)", linewidth=1.1, color="#2ca02c")
-        ax_int.set_title(f"{APP_NAME} | {OPTIMIZATION_METHOD.upper()} | Integral Energy")
-        ax_int.set_ylabel("Energy (mWh)")
-        ax_int.grid(True, alpha=0.25)
-        ax_int.legend(loc="upper left")
-
-    if plot_mode == "both":
-        axes[-1].set_xlabel("Simulation step (s)")
-    else:
-        ax.set_xlabel("Simulation step (s)")
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-
-
-def main(stop_time, it,folder_results):
+def main_dynamic(stop_time, it, folder_results):
     global CURRENT_EXECUTION_MODE
-    CURRENT_EXECUTION_MODE = str(TASK_EXECUTION_MODE).upper()
+    CURRENT_EXECUTION_MODE = str(cfg.TASK_EXECUTION_MODE).upper()
     sim_tag = build_simulation_tag()
     trace_basename = f"sim_trace_{sim_tag}"
 
@@ -1237,7 +1050,7 @@ def main(stop_time, it,folder_results):
     """
     TOPOLOGY
     """
-    t = create_topology(city_fog_devices)
+    t = create_topology_dynamic(city_fog_devices)
 
     print(t.G.nodes()) # nodes id can be str or int
 
@@ -1262,16 +1075,34 @@ def main(stop_time, it,folder_results):
         "initialAllocation": [
             {"app": APP_NAME, "module_name": "Fog", "id_resource": initial_fog_node if initial_fog_node is not None else 0},
             {"app": APP_NAME, "module_name": "Mobile", "id_resource": 2},
+            {"app": APP_NAME, "module_name": "SmartWatch", "id_resource": 3},
             {"app": APP_NAME, "module_name": "EcgSensor", "id_resource": 4}
         ]
     }
-    placement_dist = deterministic_distribution(name="MobilityPlacementTick", time=SIM_STEP_SECONDS)
-    placement = MobilityPlacement(
-        name=f"MobilityPlacement_{OPTIMIZATION_METHOD}",
+    placement_dist = deterministic_distribution(name="MobilityPlacementTick", time=cfg.SIM_STEP_SECONDS)
+    decision_output = Path(folder_results) / f"offloading_decisions_{sim_tag}.csv"
+    placement = LPOptimizationPlacement(
+        name=f"MobilityPlacement_{cfg.OPTIMIZATION_METHOD}",
         json=placementJson,
         activation_dist=placement_dist,
         mobility_model=mobility_model,
         app_name=APP_NAME,
+        output_path=decision_output,
+        mode_getter=get_execution_mode,
+        mode_setter=set_execution_mode,
+        rssi_from_distance_dbm=rssi_from_distance_dbm,
+        wifi_throughput_mbps_from_rssi=wifi_throughput_mbps_from_rssi,
+        tcp_retransmission_rate_from_rssi=tcp_retransmission_rate_from_rssi,
+        sensor_ble_energy_wh_per_mb=sensor_ble_energy_wh_per_mb,
+        sensor_wifi_data_powers_w_from_rssi=sensor_wifi_data_powers_w_from_rssi,
+        galaxy_s4_wifi_powers_w_from_rssi=galaxy_s4_wifi_powers_w_from_rssi,
+        fixed_overhead_energy_wh=fixed_overhead_energy_wh,
+        tail_energy_wh_per_transfer=tail_energy_wh_per_transfer,
+        kb_to_mb=kb_to_mb,
+        mi_to_instructions=mi_to_instructions,
+        solve_lp_two_mode=solve_lp_two_mode,
+        ips_to_ipt=ips_to_ipt,
+        watt_to_wpt=watt_to_wpt,
     )
 
     
@@ -1285,11 +1116,15 @@ def main(stop_time, it,folder_results):
     #     model (str): identifies the device or devices where the sink is linked
     #     number (int): quantity of sinks linked in each device
     #     module (str): identifies the module from the app who receives the messages
-    pop.set_sink_control({"model": node_model_name("cloud-device"), "number":1, "module":app.get_sink_modules()})
+    pop.set_sink_control({"model": "cloud-device", "number":1, "module":app.get_sink_modules()})
 
     #In addition, a source includes a distribution function:
-    dDistribution1 = deterministic_distribution(name="Deterministic", time=TASK1_PERIOD_S)
-    pop.set_src_control({"model": node_model_name("ecg-device"), "number":1, "message": app.get_message("M.TASK1.TCP.Generation"), "distribution": dDistribution1})
+    dDistribution1 = deterministic_distribution(name="Deterministic", time=cfg.TASK1_PERIOD_S)
+    pop.set_src_control({"model": "ecg-device", "number":1, "message": app.get_message("M.TASK1.TCP.Generation"), "distribution": dDistribution1})
+    dDistribution2 = deterministic_distribution(name="Deterministic", time=cfg.TASK2_PERIOD_S)
+    pop.set_src_control({"model": "smartwatch-device", "number":1, "message": app.get_message("M.TASK2.UDP.Generation"), "distribution": dDistribution2})
+    dDistribution3 = deterministic_distribution(name="Deterministic", time=cfg.TASK3_PERIOD_S)
+    pop.set_src_control({"model": "smartwatch-device", "number":1, "message": app.get_message("M.TASK3.TCP.Generation"), "distribution": dDistribution3})
 
     # populationJSON = {
     #     "sinks": [
@@ -1325,32 +1160,14 @@ def main(stop_time, it,folder_results):
     monitor_dist = deterministicDistributionStartPoint(
         name="MobilityDistanceTick",
         start=0,
-        time=SIM_STEP_SECONDS,
+        time=cfg.SIM_STEP_SECONDS,
     )
     s.deploy_monitor(
-        f"MobilityDistanceMonitor_{OPTIMIZATION_METHOD}",
+        f"MobilityDistanceMonitor_{cfg.OPTIMIZATION_METHOD}",
         distance_monitor.run,
         monitor_dist,
         sim=s,
     )
-
-    decision_output = Path(folder_results) / f"offloading_decisions_{sim_tag}.csv"
-    offloading_monitor = OffloadingDecisionMonitor(
-        mobility_model=mobility_model,
-        output_path=decision_output,
-    )
-    decision_dist = deterministicDistributionStartPoint(
-        name="OffloadingDecisionTick",
-        start=0,
-        time=OFFLOADING_DECISION_PERIOD_S,
-    )
-    s.deploy_monitor(
-        f"OffloadingDecisionMonitor_{OPTIMIZATION_METHOD}",
-        offloading_monitor.run,
-        decision_dist,
-        sim=s,
-    )
-
 
     """
     RUNNING
@@ -1358,21 +1175,28 @@ def main(stop_time, it,folder_results):
     logging.info(" Performing simulation: %i " % it)
     s.run(stop_time)  # To test deployments put test_initial_deploy a TRUE
     distance_monitor.flush()
-    offloading_monitor.flush()
+    placement.flush()
     s.print_debug_assignaments()
 
-    if ENABLE_ANIMATION:
+    if cfg.ENABLE_ANIMATION:
         generate_mobility_animation(
             mobility_model=mobility_model,
             output_path=Path(folder_results) / f"mobility_placement_{sim_tag}.gif",
+            app_name=APP_NAME,
+            optimization_method=cfg.OPTIMIZATION_METHOD,
+            current_execution_mode=CURRENT_EXECUTION_MODE,
+            animation_format=cfg.ANIMATION_FORMAT,
+            animation_step_stride=cfg.ANIMATION_STEP_STRIDE,
             placement_history_path=distance_output,
             simulated_until_step=max(0, int(stop_time) - 1),
-            step_stride=ANIMATION_STEP_STRIDE,
         )
 
     generate_energy_decision_plot(
         decision_history_path=decision_output,
         output_path=Path(folder_results) / f"energy_decision_{sim_tag}.png",
+        app_name=APP_NAME,
+        optimization_method=cfg.OPTIMIZATION_METHOD,
+        decision_period_s=cfg.OFFLOADING_DECISION_PERIOD_S,
     )
 
     s1 = Stats(defaultPath=os.path.join(os.getcwd(), folder_results, trace_basename))
@@ -1385,6 +1209,124 @@ def main(stop_time, it,folder_results):
     latency = pd.concat([s1.times("time_latency"), s1.times("time_service"), s1.times("time_total_response")], axis=1)
     latency.loc["Total"] = latency.sum()
     print(latency)
+    print("\nLatency Report by Task (in time unit):")
+    print(build_task_latency_report(s1))
+
+
+def main_static(stop_time, it, folder_results):
+    sim_tag = build_simulation_tag()
+    trace_basename = f"sim_trace_{sim_tag}"
+
+    t = create_topology_static()
+
+    print(t.G.nodes())
+
+    pos = nx.spring_layout(t.G)
+    nx.draw_networkx(t.G, pos, with_labels=True)
+    nx.draw_networkx_edge_labels(t.G, pos, alpha=0.5, font_size=5, verticalalignment="top")
+
+    app = create_application()
+
+    module_to_node = {
+        "Fog": 1,
+        "Mobile": 2,
+        "SmartWatch": 3,
+        "EcgSensor": 4,
+    }
+    initial_allocation = [
+        {"app": APP_NAME, "module_name": module_name, "id_resource": node_id}
+        for module_name, node_id in module_to_node.items()
+        if module_name in app.services
+    ]
+    placement_json = {"initialAllocation": initial_allocation}
+    placement = JSONPlacement(name="Placement", json=placement_json)
+
+    pop = Statical("Statical")
+    pop.set_sink_control({"model": "cloud-device", "number": 1, "module": app.get_sink_modules()})
+
+    d_ecg = deterministic_distribution(name="Deterministic", time=cfg.TASK1_PERIOD_S)
+    pop.set_src_control({
+        "model": "ecg-device",
+        "number": 1,
+        "message": app.get_message("M.TASK1.TCP.Generation"),
+        "distribution": d_ecg,
+    })
+    d_sw = deterministic_distribution(name="Deterministic", time=cfg.TASK2_PERIOD_S)
+    pop.set_src_control({
+        "model": "smartwatch-device",
+        "number": 1,
+        "message": app.get_message("M.TASK2.UDP.Generation"),
+        "distribution": d_sw,
+    })
+    d_sw_t3 = deterministic_distribution(name="Deterministic", time=cfg.TASK3_PERIOD_S)
+    pop.set_src_control({
+        "model": "smartwatch-device",
+        "number": 1,
+        "message": app.get_message("M.TASK3.TCP.Generation"),
+        "distribution": d_sw_t3,
+    })
+    d_sw_t4 = deterministic_distribution(name="Deterministic", time=cfg.TASK4_PERIOD_S)
+    pop.set_src_control({
+        "model": "smartwatch-device",
+        "number": 1,
+        "message": app.get_message("M.TASK4.TCP.Generation"),
+        "distribution": d_sw_t4,
+    })
+    d_ecg_t5 = deterministic_distribution(name="Deterministic", time=cfg.TASK5_PERIOD_S)
+    pop.set_src_control({
+        "model": "ecg-device",
+        "number": 1,
+        "message": app.get_message("M.TASK5.TCP.Generation"),
+        "distribution": d_ecg_t5,
+    })
+
+    selector_path = First_ShortestPath()
+    s = Sim(t, default_results_path=folder_results + trace_basename)
+    s.deploy_app2(app, placement, pop, selector_path)
+
+    static_link_monitor = StaticLinkMonitor(fixed_rssi_dbm=cfg.STATIC_LINK_RSSI_DBM)
+    static_monitor_dist = deterministicDistributionStartPoint(
+        name="StaticLinkTick",
+        start=0,
+        time=cfg.SIM_STEP_SECONDS,
+    )
+    s.deploy_monitor(
+        "StaticLinkMonitor",
+        static_link_monitor.run,
+        static_monitor_dist,
+        sim=s,
+    )
+
+    logging.info(" Performing simulation: %i ", it)
+    s.run(stop_time)
+    s.print_debug_assignaments()
+
+    s1 = Stats(defaultPath=os.path.join(os.getcwd(), folder_results, trace_basename))
+    s1.showResults(total_time=stop_time, topology=t, multiplier=1)
+
+    print("\nLatency Report (in time unit):")
+    latency = pd.concat([s1.times("time_latency"), s1.times("time_service"), s1.times("time_total_response")], axis=1)
+    latency.loc["Total"] = latency.sum()
+    print(latency)
+    print("\nLatency Report by Task (in time unit):")
+    print(build_task_latency_report(s1))
+
+
+def parse_runtime_args():
+    parser = argparse.ArgumentParser(description="YAFS offloading simulation runner")
+    parser.add_argument(
+        "--scenario",
+        choices=sorted(ALL_SCENARIOS),
+        default=DEFAULT_APP,
+        help="Scenario name. CityScenario runs dynamic mode; Fog/Hybrid/Mobile run static mode.",
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        default=None,
+        help="Optional simulation duration override (seconds).",
+    )
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
@@ -1395,12 +1337,19 @@ if __name__ == '__main__':
     folder_results.mkdir(parents=True, exist_ok=True)
     folder_results = str(folder_results)+"/"
 
+    args = parse_runtime_args()
+    APP_NAME = args.scenario
+    SIMULATION_MODE = "dynamic" if APP_NAME in DYNAMIC_SCENARIOS else "static"
     nIterations = 1  # iteration for each experiment
     simulationDuration = 3600
-    if APP_NAME == "CityScenario":
+    if args.duration is not None:
+        simulationDuration = args.duration
+    elif APP_NAME == "CityScenario":
         dataset_dir = Path(__file__).parent / f"{APP_NAME}/dataset"
         user_trace = load_user_trace(dataset_dir)
         simulationDuration = len(user_trace)
+
+    logging.info("Runtime configuration: scenario=%s duration=%s", APP_NAME, simulationDuration)
 
     # Iteration for each experiment changing the seed of randoms
     for iteration in range(nIterations):
@@ -1408,8 +1357,10 @@ if __name__ == '__main__':
         logging.info("Running experiment it: - %i" % iteration)
 
         start_time = time.time()
-        main(stop_time=simulationDuration,
-             it=iteration,folder_results=folder_results)
+        if SIMULATION_MODE == "dynamic":
+            main_dynamic(stop_time=simulationDuration, it=iteration, folder_results=folder_results)
+        else:
+            main_static(stop_time=simulationDuration, it=iteration, folder_results=folder_results)
 
         print("\n--- %s seconds ---" % (time.time() - start_time))
 

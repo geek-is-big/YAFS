@@ -16,7 +16,24 @@ class Metrics:
     def __init__(self, default_results_path=None):
         columns_event = ["id","type", "app", "module", "message","DES.src","DES.dst","TOPO.src","TOPO.dst","module.src","service", "time_in","time_out",
                          "time_emit","time_reception"]
-        columns_link = ["id","type", "src", "dst", "app", "latency", "message", "ctime", "size","buffer"]
+        columns_link = [
+            "id",
+            "type",
+            "src",
+            "dst",
+            "app",
+            "latency",
+            "message",
+            "ctime",
+            "size",
+            "buffer",
+            "rtr",
+            "attempts",
+            "tx_wh",
+            "rx_wh",
+            "tail_tx_wh",
+            "tail_rx_wh",
+        ]
 
         path = "result"
         if  default_results_path is not None:
@@ -61,6 +78,12 @@ class Metrics:
                     value["ctime"],
                     value["size"],
                     value["buffer"],
+                    value.get("rtr", 0.0),
+                    value.get("attempts", 1),
+                    value.get("tx_wh", 0.0),
+                    value.get("rx_wh", 0.0),
+                    value.get("tail_tx_wh", 0.0),
+                    value.get("tail_rx_wh", 0.0),
 
                             ])
 
