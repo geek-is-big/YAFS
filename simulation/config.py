@@ -6,6 +6,12 @@ class TimeUnit(Enum):
     MILLISECOND = 2
 
 
+# What's bad
+# Configs become outdated, when codex changes something, and it doesn't delete outdated configs.
+
+# RULE: before refactor something, it should be covered with tests.
+
+
 TIME_UNIT = TimeUnit.SECOND
 
 USER_SPEED_MPS = 1.4
@@ -22,29 +28,15 @@ NEAREST_NODES_TO_PRINT = 3
 RSSI_REFERENCE_DISTANCE_M = 1.0
 RSSI_AT_REFERENCE_DBM = -20.0
 RSSI_ENVIRONMENT_COEFF = 2.7
-WIFI_RETRANSMISSION_RTT_S = 0.03  # 30ms
 
-# WiFi throughput model (YAFS BW units are MB/s).
-WIFI_MAX_BW_MBPS = 54.0 / 8.0
-WIFI_MEDIUM_BW_MBPS = 11.0 / 8.0
-WIFI_MIN_BW_MBPS = 1.0 / 8.0
+# Device-specific WiFi/BLE profiles are defined in simulation/device_profiles.py.
 
-# Galaxy S4 WiFi tail model.
-WIFI_TAIL_TIME_S = 0.210
-WIFI_TAIL_POWER_W = 0.289
 
-# Sensor WiFi model.
-SENSOR_WIFI_TAIL_TIME_S = 0.18
-SENSOR_WIFI_TAIL_POWER_W = 0.1212
-SENSOR_WIFI_PROMOTION_TIME_S = 0.30
-SENSOR_WIFI_PROMOTION_POWER_W = 0.2425
-
-# Sensor BLE model (sensor <-> edge, near distance ~0.5m).
-SENSOR_BLE_TAIL_TIME_S = 4.77
-SENSOR_BLE_TAIL_POWER_W = 0.0341
-SENSOR_BLE_TX_POWER_W = 0.1115
-SENSOR_BLE_RX_POWER_W = 0.1172
-SENSOR_BLE_DATA_BW_MBPS = 0.305
+# TODO: Maybe, the task should be created be the class constructor or method,
+# cause it's currently unclear what parameters should be used to create the task,
+# and it may lead to code duplication in the future when we will add more tasks.
+# Also, this config is a mess, mayby it's better to create static array of tasks with all parameters,
+# and then just read them in the code when we need to create a task.
 
 # Task1 profile (ECG classification)
 TASK1_ID = "Task1"

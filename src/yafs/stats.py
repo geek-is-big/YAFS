@@ -15,6 +15,7 @@ class Stats:
         name = base.name
         if name.startswith("sim_trace_"):
             tag = name[len("sim_trace_"):]
+            # TODO: should the offloading_path be checked under the if name.startswith("sim_trace_"): ?
             offloading_path = base.with_name(f"offloading_decisions_{tag}.csv")
             if offloading_path.exists():
                 self.df_offloading = pd.read_csv(offloading_path)

@@ -22,11 +22,17 @@ class LPOptimizationPlacement(MobilityPlacement):
         mode_setter,
         rssi_from_distance_dbm,
         wifi_throughput_mbps_from_rssi,
+        sensor_wifi_throughput_mbps_from_rssi,
         tcp_retransmission_rate_from_rssi,
         sensor_ble_energy_wh_per_mb,
+        sensor_ble_data_bw_mb_s,
+        sensor_ble_rx_power_w,
+        sensor_ble_tail_energy_wh_per_transfer,
         sensor_wifi_data_powers_w_from_rssi,
-        galaxy_s4_wifi_powers_w_from_rssi,
-        fixed_overhead_energy_wh,
+        sensor_wifi_promotion_energy_wh_per_transfer,
+        sensor_wifi_tail_energy_wh_per_transfer,
+        mobile_to_fog_wifi_powers_w_from_rssi,
+        fog_to_mobile_wifi_powers_w_from_rssi,
         tail_energy_wh_per_transfer,
         kb_to_mb,
         mi_to_instructions,
@@ -42,11 +48,21 @@ class LPOptimizationPlacement(MobilityPlacement):
 
         self.rssi_from_distance_dbm = rssi_from_distance_dbm
         self.wifi_throughput_mbps_from_rssi = wifi_throughput_mbps_from_rssi
+        self.sensor_wifi_throughput_mbps_from_rssi = sensor_wifi_throughput_mbps_from_rssi
         self.tcp_retransmission_rate_from_rssi = tcp_retransmission_rate_from_rssi
         self.sensor_ble_energy_wh_per_mb = sensor_ble_energy_wh_per_mb
+        self.sensor_ble_data_bw_mb_s = sensor_ble_data_bw_mb_s
+        self.sensor_ble_rx_power_w = sensor_ble_rx_power_w
+        self.sensor_ble_tail_energy_wh_per_transfer = sensor_ble_tail_energy_wh_per_transfer
         self.sensor_wifi_data_powers_w_from_rssi = sensor_wifi_data_powers_w_from_rssi
-        self.galaxy_s4_wifi_powers_w_from_rssi = galaxy_s4_wifi_powers_w_from_rssi
-        self.fixed_overhead_energy_wh = fixed_overhead_energy_wh
+        self.sensor_wifi_promotion_energy_wh_per_transfer = (
+            sensor_wifi_promotion_energy_wh_per_transfer
+        )
+        self.sensor_wifi_tail_energy_wh_per_transfer = (
+            sensor_wifi_tail_energy_wh_per_transfer
+        )
+        self.mobile_to_fog_wifi_powers_w_from_rssi = mobile_to_fog_wifi_powers_w_from_rssi
+        self.fog_to_mobile_wifi_powers_w_from_rssi = fog_to_mobile_wifi_powers_w_from_rssi
         self.tail_energy_wh_per_transfer = tail_energy_wh_per_transfer
         self.kb_to_mb = kb_to_mb
         self.mi_to_instructions = mi_to_instructions
@@ -77,6 +93,7 @@ class LPOptimizationPlacement(MobilityPlacement):
         current_mobile_topology_id = sim.alloc_DES.get(mobile_des[0], None) if mobile_des else None
         rssi_fog_dbm = self.rssi_from_distance_dbm(nearest_distance_m)
         wifi_bw_mb_s = self.wifi_throughput_mbps_from_rssi(rssi_fog_dbm)
+        sensor_wifi_bw_mb_s = self.sensor_wifi_throughput_mbps_from_rssi(rssi_fog_dbm)
         tcp_retx_rate = self.tcp_retransmission_rate_from_rssi(rssi_fog_dbm)
         attempts_factor = 1.0 / max(1.0 - tcp_retx_rate, 1e-12)
 
@@ -84,10 +101,10 @@ class LPOptimizationPlacement(MobilityPlacement):
         task_result_mb = 740.0 / (1024.0 * 1024.0)
         migration_mb = self.kb_to_mb(cfg.TASK1_MIGRATION_STATE_SIZE_KB)
 
-        ble_bw_mb_s = self.ips_to_ipt(cfg.SENSOR_BLE_DATA_BW_MBPS)
+        ble_bw_mb_s = self.sensor_ble_data_bw_mb_s()
         delay_sensor_edge = task_input_mb / max(ble_bw_mb_s, 1e-12)
         delay_edge_fog = task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
-        delay_sensor_fog = task_input_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
+        delay_sensor_fog = task_input_mb / max(sensor_wifi_bw_mb_s, 1e-12) * attempts_factor
 
         mobile_ipt = self.ips_to_ipt(1.9 * 10**9)
         fog_ipt = self.ips_to_ipt(500 * 10**6)
@@ -102,19 +119,20 @@ class LPOptimizationPlacement(MobilityPlacement):
         _, sensor_ble_data_wh_per_mb, sensor_ble_tail_wh = self.sensor_ble_energy_wh_per_mb()
         sensor_ble_tx_wh = sensor_ble_data_wh_per_mb * task_input_mb + sensor_ble_tail_wh
 
-        edge_ble_rx_wh = self.watt_to_wpt(cfg.SENSOR_BLE_RX_POWER_W) * ble_transfer_tu
-        edge_ble_rx_wh += self.fixed_overhead_energy_wh(cfg.SENSOR_BLE_TAIL_POWER_W, cfg.SENSOR_BLE_TAIL_TIME_S)
+        edge_ble_rx_wh = self.watt_to_wpt(self.sensor_ble_rx_power_w()) * ble_transfer_tu
+        edge_ble_rx_wh += self.sensor_ble_tail_energy_wh_per_transfer()
         edge_proc_wh = self.watt_to_wpt(1.3) * proc_delay_edge
-        edge_wifi_tx_w, edge_wifi_rx_w = self.galaxy_s4_wifi_powers_w_from_rssi(rssi_fog_dbm)
+        edge_wifi_tx_w, fog_wifi_rx_w = self.mobile_to_fog_wifi_powers_w_from_rssi(rssi_fog_dbm)
+        fog_wifi_tx_w, edge_wifi_rx_w = self.fog_to_mobile_wifi_powers_w_from_rssi(rssi_fog_dbm)
         edge_tx_to_fog_wh = self.watt_to_wpt(edge_wifi_tx_w) * (task_result_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
         edge_tx_to_fog_wh += self.tail_energy_wh_per_transfer()
         energy_edge = sensor_ble_tx_wh + edge_ble_rx_wh + edge_proc_wh + edge_tx_to_fog_wh
 
         sensor_wifi_tx_w, _, sensor_wifi_available = self.sensor_wifi_data_powers_w_from_rssi(rssi_fog_dbm)
         if sensor_wifi_available:
-            sensor_tx_to_fog_wh = self.watt_to_wpt(sensor_wifi_tx_w) * (task_input_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor)
-            sensor_tx_to_fog_wh += self.fixed_overhead_energy_wh(cfg.SENSOR_WIFI_PROMOTION_POWER_W, cfg.SENSOR_WIFI_PROMOTION_TIME_S)
-            sensor_tx_to_fog_wh += self.fixed_overhead_energy_wh(cfg.SENSOR_WIFI_TAIL_POWER_W, cfg.SENSOR_WIFI_TAIL_TIME_S)
+            sensor_tx_to_fog_wh = self.watt_to_wpt(sensor_wifi_tx_w) * (task_input_mb / max(sensor_wifi_bw_mb_s, 1e-12) * attempts_factor)
+            sensor_tx_to_fog_wh += self.sensor_wifi_promotion_energy_wh_per_transfer()
+            sensor_tx_to_fog_wh += self.sensor_wifi_tail_energy_wh_per_transfer()
         else:
             sensor_tx_to_fog_wh = 0.0
 
@@ -135,7 +153,7 @@ class LPOptimizationPlacement(MobilityPlacement):
             migration_time_tu = migration_mb / max(wifi_bw_mb_s, 1e-12) * attempts_factor
             migration_edge_energy_wh = self.watt_to_wpt(edge_wifi_tx_w) * migration_time_tu
             migration_edge_energy_wh += self.tail_energy_wh_per_transfer()
-            migration_fog_energy_wh = self.watt_to_wpt(3.7) * migration_time_tu
+            migration_fog_energy_wh = self.watt_to_wpt(fog_wifi_rx_w) * migration_time_tu
         migration_energy_wh = migration_edge_energy_wh + migration_fog_energy_wh
 
         real_energy_edge = 0.0

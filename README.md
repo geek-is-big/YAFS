@@ -5,3 +5,10 @@ How to run:
 2. cd simulation && python offloading.py
 
 You can change simulation scenario by changing the APP_NAME variable in offloading.py
+
+## Black-box Tests
+
+```bash
+python tests/blackbox/generate_goldens.py
+pytest tests/blackbox -m fast_matrix -q  # use -m full_matrix for the full 2x2x9 suite
+```

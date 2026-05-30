@@ -14,5 +14,8 @@
         "reportUnknownArgumentType": "none",
         "reportUnknownVariableType": "none",
         "reportUnknownParameterType": "none"
-    }
+    },
+    "python.experiments.optOutFrom": [
+        "pythonTerminalEnvVarActivation"
+    ]
 }

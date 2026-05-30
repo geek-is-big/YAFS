@@ -7,4 +7,4 @@
 !.vscode/launch.json
 build/
 src/yafs.egg-info/
-
+tests/blackbox/goldens/tmp/

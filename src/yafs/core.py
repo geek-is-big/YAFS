@@ -286,6 +286,8 @@ class Sim:
                         attempts += 1
                     latency_msg_link = base_latency_msg_link * attempts
 
+                    # TODO: why are here two edge_data.get("WATT_TRANS", 0.0) calls?
+                    # Same for the rx_power.
                     tx_power = edge_data.get(
                         f"WATT_TRANS_{link[0]}-{link[1]}",
                         edge_data.get("WATT_TRANS", 0.0),
