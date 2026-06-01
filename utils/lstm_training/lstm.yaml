@@ -1,0 +1,30 @@
+lstm:
+  history_len: 20
+  pred_horizon: 30
+  use_delta: true
+  hidden_size_1: 64
+  hidden_size_2: 32
+  dropout: 0.1
+
+training:
+  batch_size: 64
+  epochs: 100
+  learning_rate: 0.001
+  early_stopping_patience: 10
+  seed: 12345
+  device: cpu # auto (sets mps), cpu, cuda, mps
+
+data:
+  train_rssi_csv: utils/lstm_dataset_gen/data/generated/routes_train_rssi.csv
+  val_rssi_csv: utils/lstm_dataset_gen/data/generated/routes_val_rssi.csv
+  fog_csv: simulation/CityScenario/dataset/edgeResources-melbCBD.csv
+
+artifacts:
+  model_path: utils/lstm_training/artifacts/lstm_rssi.pt
+  scaler_path: utils/lstm_training/artifacts/rssi_scaler.json
+  train_metrics_path: utils/lstm_training/artifacts/train_metrics.json
+  val_metrics_path: utils/lstm_training/artifacts/val_metrics.json
+
+results:
+  eval_predictions_path: utils/lstm_training/results/lstm_eval_fixed_route.csv
+  eval_metrics_path: utils/lstm_training/results/lstm_eval_metrics.json

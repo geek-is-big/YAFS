@@ -8,3 +8,10 @@
 build/
 src/yafs.egg-info/
 tests/blackbox/goldens/tmp/
+
+simulation/results/
+
+utils/load_map/cache/
+utils/lstm_dataset_gen/data/generated/
+utils/lstm_training/artifacts/
+utils/lstm_training/results/

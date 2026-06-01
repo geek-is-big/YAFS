@@ -1,0 +1,26 @@
+route_generation:
+  num_train_routes: 500
+  num_val_routes: 100
+  route_duration_steps_min: 120
+  route_duration_steps_max: 1200
+  step_seconds: 1.0
+  speed_mps_min: 0.5
+  speed_mps_max: 1.8
+  stop_probability: 0.05
+  stop_duration_min: 5
+  stop_duration_max: 60
+  waypoint_count_min: 1
+  waypoint_count_max: 3
+  route_type_weights:
+    static: 1.0
+    random_shortest_path: 1.0
+    multi_stop: 1.0
+    stop_and_go: 1.0
+    passing_by_fog: 1.0
+    handover: 1.0
+    u_turn: 1.0
+
+radio:
+  add_rssi_noise: false
+  rssi_noise_std_db: 2.0
+  random_seed: 12345

@@ -1,0 +1,16 @@
+CBD area corners:
+
+
+North-east corner - -37.806889, 144.971577
+North-west corner - -37.813086, 144.951210
+South-east corner - -37.815256, 144.975066
+South-west corner - -37.821401, 144.954892
+
+
+Melbourne rectangle:
+
+North side = -37.806889
+South side = -37.821401
+East side = 144.975066
+West side = 144.951210
+
